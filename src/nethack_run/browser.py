@@ -12,6 +12,7 @@ from urllib.parse import urlencode, urlsplit
 from aiohttp import ClientSession, ClientTimeout, ClientError, web
 from .attempt import Conflict
 from .recording import recording
+from .leaderboard import leaderboard
 
 ASSETS = Path(__file__).with_name('web')
 COOKIE = 'nethack_owner'
@@ -155,6 +156,10 @@ class Browser:
         return a.status() | {'harness_version': a.info.get('harness_version'), 'character': a.character, 'player': a.info['metadata'],
                              'last_activity': a.last_activity, 'session_seconds': a.clock()}
 
+    async def leaderboard(self, request):
+        self.session(request)
+        return web.json_response(leaderboard(self.server.attempts.values(), request.query.get('version')))
+
     async def attempts(self, request):
         self.session(request)
         attempts = sorted(self.server.attempts.values(), key=lambda a: a.last_activity, reverse=True)
@@ -245,6 +250,7 @@ class Browser:
         app.router.add_post('/auth/logout', self.logout)
         app.router.add_get('/dashboard/me', self.me)
         app.router.add_get('/dashboard/attempts', self.attempts)
+        app.router.add_get('/dashboard/leaderboard', self.leaderboard)
         app.router.add_get('/dashboard/attempts/{id}', self.attempt)
         app.router.add_get('/dashboard/attempts/{id}/replay', self.replay_file)
         app.router.add_post('/dashboard/attempts/{id}/{action}', self.attempt)

@@ -12,6 +12,7 @@ export NETHACK_CONTAINER_ENGINE
 .PHONY: setup test verify-build
 setup:
 	python3 scripts/setup.py
+	python3 scripts/prepare_guidebook.py
 
 test:
 	$(PYTHON) -m pytest -q

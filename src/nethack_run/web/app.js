@@ -1,7 +1,8 @@
 'use strict';
 const $ = id => document.getElementById(id);
 let csrf, selected = null, busy = false, lastList = '';
-let refreshEpoch = 0;
+let refreshEpoch = 0, lastLeaderboard = '';
+const scoreFormat = new Intl.NumberFormat(undefined, {maximumFractionDigits: 2});
 let replayId = null, replayPlayer = null, replayEpoch = 0;
 async function api(path, options = {}) {
   const response = await fetch(path, {cache: 'no-store', ...options, headers: {'X-CSRF-Token': csrf || '', ...options.headers}});
@@ -27,6 +28,25 @@ function updateVersions(all) {
   select.dataset.versions = signature;
   select.replaceChildren(new Option('All versions', 'all'), ...versions.map(v => new Option(v === 'unknown' ? 'Unknown version' : `v${v}`, v)));
   select.value = previous;
+}
+function showLeaderboard(data) {
+  const signature = JSON.stringify(data);
+  if (signature === lastLeaderboard) return;
+  lastLeaderboard = signature;
+  $('leaderboard-rows').replaceChildren();
+  $('leaderboard-table').hidden = data.groups.length === 0;
+  $('leaderboard-summary').textContent = data.groups.length
+    ? `${data.scored_attempts} scored attempts · ${data.groups.length} model / effort groups · ${data.excluded_attempts} completed attempts without scores`
+    : `No scored model attempts for this version. ${data.excluded_attempts} completed attempts have no recorded score.`;
+  for (const group of data.groups) {
+    const row = document.createElement('tr');
+    for (const value of [group.rank, group.model || 'Unknown model', group.reasoning_effort || 'Unknown',
+                         scoreFormat.format(group.average_score), group.attempt_count,
+                         scoreFormat.format(group.best_score), group.ascensions]) {
+      const cell = document.createElement('td'); cell.textContent = value; row.append(cell);
+    }
+    $('leaderboard-rows').append(row);
+  }
 }
 function showDetails(a) {
   $('attempt-details').replaceChildren();
@@ -82,6 +102,9 @@ async function refresh() {
     if (epoch !== refreshEpoch) return;
     updateVersions(all);
     const filter = $('filter').value, version = $('version-filter').value;
+    const board = await (await api('/dashboard/leaderboard' + (version === 'all' ? '' : '?version=' + encodeURIComponent(version)))).json();
+    if (epoch !== refreshEpoch) return;
+    showLeaderboard(board);
     const runs = all.filter(a => (version === 'all' || versionKey(a) === version) &&
       (filter === 'all' || (filter === 'active' ? a.state !== 'finished' : a.state === 'finished')));
     $('count').textContent = `${runs.length} ${runs.length === 1 ? 'attempt' : 'attempts'}`;

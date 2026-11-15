@@ -11,6 +11,8 @@ COPY scripts/setup.py scripts/setup.py
 COPY patches patches
 COPY config/nethackrc config/sysconf config/official-images.json config/
 RUN python scripts/setup.py
+COPY scripts/prepare_guidebook.py scripts/prepare_guidebook.py
+RUN python scripts/prepare_guidebook.py
 COPY requirements.lock requirements.lock
 RUN python -m venv .venv && .venv/bin/pip install --require-hashes -r requirements.lock
 COPY src src
@@ -24,6 +26,7 @@ WORKDIR /opt/nethack-run
 COPY --from=build /opt/nethack-run/.venv .venv
 COPY --from=build --chown=1000:1000 /opt/nethack-run/build/install build/install
 COPY --from=build /opt/nethack-run/build/build.json build/build.json
+COPY --from=build /opt/nethack-run/build/Guidebook.txt build/Guidebook.txt
 COPY --from=build /runtime-libs /opt/nethack-run/lib
 ENV LD_LIBRARY_PATH=/opt/nethack-run/lib
 COPY src src

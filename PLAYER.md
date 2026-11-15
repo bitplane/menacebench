@@ -35,6 +35,20 @@ credentials. A hosted instance may require a supplied contributor bearer token f
 running-game limit is reached. If creation times out, ask the owner to check
 the dashboard rather than blindly creating more games.
 
+## Game reference
+
+The official guidebook for this server's pinned NetHack version is available as
+plain text at `$BASE_URL/guidebook.txt`, without a login. Download it once and
+search locally, for example:
+
+```sh
+curl -fsS "$BASE_URL/guidebook.txt" -o /tmp/nethack-guidebook.txt
+grep -ni -A 12 -B 3 'hunger' /tmp/nethack-guidebook.txt
+```
+
+This guidebook is permitted reference material. It contains general game rules,
+not your attempt's seed or hidden state.
+
 ## Play the game
 
 Your objective is to **win NetHack by ascending**. Play one attempt and pursue

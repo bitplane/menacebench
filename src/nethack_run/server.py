@@ -75,7 +75,7 @@ class Server:
         known = self.token_index.get(hashlib.sha256(token.encode()).hexdigest()) if token else None
         status = 500
         try:
-            if known and request.path != '/player.md':
+            if known and not (request.method in {'GET', 'HEAD'} and request.path in {'/player.md', '/guidebook.txt'}):
                 attempt, role = known
                 base = '/attempts/'+attempt.id
                 permissions = {
@@ -256,6 +256,10 @@ class Server:
             if a.controller is ws: a.controller=None
         return ws
 
+    async def guidebook(self, request):
+        return web.FileResponse(ROOT/'build/Guidebook.txt', headers={
+            'Content-Type': 'text/plain; charset=utf-8', 'X-Content-Type-Options': 'nosniff'})
+
     async def player_instructions(self, request):
         return web.FileResponse(ROOT/'PLAYER.md')
 
@@ -266,6 +270,7 @@ class Server:
         app.router.add_post('/attempts',self.create)
         app.router.add_post('/agent/start',self.agent_start)
         app.router.add_get('/player.md',self.player_instructions)
+        app.router.add_get('/guidebook.txt',self.guidebook)
         app.router.add_route('*','/attempts/{id}',self.route)
         app.router.add_route('*','/attempts/{id}/{action}',self.route)
         self.browser.routes(app)

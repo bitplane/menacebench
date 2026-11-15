@@ -318,3 +318,22 @@ To backfill legacy data, stop the server and run
 The tool locks the store, backs up every affected file, updates creation records
 and any existing package checksums, and preserves seeds, tokens, and game events.
 Keep the backup private: it contains the original private attempt data.
+
+## Model leaderboard and guidebook
+
+The owner dashboard ranks model/reasoning-effort groups by average recorded
+score. The version selector applies to both the leaderboard and attempt list;
+the ongoing/finished selector applies only to the list. All versions combines
+results across releases. Each row shows the scored-attempt count, best score,
+and ascensions. Exact reported model and effort strings define groups, with
+missing values shown as unknown. Human attempts, ongoing games, and completed
+attempts without a recorded score are excluded; scored quits and zero scores
+are included. Tied averages share a rank. Results are rebuilt from the durable
+attempt records, so they survive restarts without sharing NetHack score files.
+
+`GET /guidebook.txt` serves upstream's unmodified plain-text guidebook from the
+pinned NetHack source, without authentication (player tokens also work). Agents
+can download and grep it as described in `PLAYER.md`. `make setup` prepares the
+file; existing source builds can run `python3 scripts/prepare_guidebook.py`.
+The container includes this file and the NetHack license; Markdown conversion
+is unnecessary.
