@@ -53,7 +53,7 @@ async def main(args):
 
 if __name__=='__main__':
     parser=argparse.ArgumentParser()
-    parser.add_argument('--url',default='http://127.0.0.1:8000')
+    parser.add_argument('--url',default='http://127.0.0.1:8756')
     parser.add_argument('--unix-socket')
     parser.add_argument('--save-resume',action='store_true',help='Include a save and restore into a second session')
     parser.add_argument('--output',type=Path,default=ROOT/'build/demo')

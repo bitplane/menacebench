@@ -41,7 +41,7 @@ install its own ncurses development package instead.
 Start a development server:
 
 ```sh
-./nethack-run serve --state runs --host 127.0.0.1 --port 8000
+./nethack-run serve --state runs --host 127.0.0.1 --port 8756
 ```
 
 Alternatively, `--unix-socket /tmp/nethack.sock` selects a Unix listener. Curl
@@ -58,20 +58,28 @@ The game runs as UID 1000. Build and start it with:
 
 ```sh
 make image
-make run
+make up                           # starts in the background at http://127.0.0.1:8756
+make logs
+make down                         # stops the server; recordings persist
 ```
 
 If needed, `NETHACK_CONTAINER_ENGINE` selects another compatible executable;
 set it consistently for Make targets and direct CLI commands. No rootful daemon
 is required by the default Podman workflow.
 
-`make image` runs the engine and recovery tests during the build and records the
-local content-addressed image ID in `build/image-id`. `make run` passes that ID
+`make image` runs the full integration suite during the build and records the
+local content-addressed image ID in `build/image-id`. `make up` passes that ID
 to the server and stores attempts in the `nethack-runs` Podman volume. An image
 intended for distribution should use its registry `repository@sha256:...`
 reference as `NETHACK_IMAGE_DIGEST`, and that exact reference must be added to
 `config/official-images.json` after its checks pass. That allowlist is currently
 empty; this checkout does not claim an official published image exists.
+
+`make up` replaces the named `nethack-run` container with the current built image,
+retaining its volume. Running it again restarts the service and applies updated
+login configuration. `make run` is the foreground alternative. `PORT=8756` is the
+default host port; the container listens on 8000 internally. Only loopback is
+published. Changing `PORT` also requires updating the OAuth origin/callback.
 
 Replay automatically selects the recorded image when necessary. It permits only
 tracked official image references or the locally built image ID, mounts the
@@ -80,12 +88,90 @@ process limits. A diagnostic comparison against another build is available via
 `--diagnostic-cross-build`; it reports reproduction without claiming official
 verification.
 
+## Browser login
+
+The owner dashboard at `http://127.0.0.1:8756` lists ongoing and completed attempts,
+shows the current screen, and supports pause, resume, and finished trace-package
+downloads. Browser owner sessions are separate from bot player tokens. The UI
+never returns live seeds, token hashes, or private snapshots.
+The public landing page has separate human sign-in and agent-start instructions.
+
+1. [Register a GitHub OAuth app](https://github.com/settings/applications/new)
+   with homepage `http://127.0.0.1:8756` and callback
+   `http://127.0.0.1:8756/auth/github/callback`.
+2. Copy `config/github-auth.example.json` to `config/github-auth.local.json`,
+   set its permissions to `600`, and fill in the client ID and client secret.
+   Set `owner_ids` to your numeric GitHub account ID, available from
+   `https://api.github.com/users/YOUR_LOGIN`. The checked-in example uses this
+   workspace owner's account. Keep `public_url` equal to the browser origin,
+   without a trailing slash.
+3. Run `make image` then `make up`, open the dashboard, and sign in.
+
+The local credentials file is ignored by Git and container builds. Podman
+mounts it as a secret readable by the container's non-root user. Override its
+location with `GITHUB_AUTH_CONFIG=/absolute/path/to/private.json`. For native
+development, use `./nethack-run serve --github-auth config/github-auth.local.json`.
+Without configuration, the game API remains available but browser login is disabled.
+
+Login uses GitHub's authorization-code flow with state and PKCE, requesting no
+repository or email scopes. Only the configured numeric account IDs receive
+owner access. Browser cookies are HttpOnly and SameSite=Lax (also Secure on
+HTTPS); mutations require a same-origin CSRF token. Sessions expire after seven
+days and are cleared by server restart or sign-out. GitHub access tokens are
+used only to obtain identity and are not retained. OAuth codes and secrets are
+not included in run traces.
+
+For access over SSH/Tailscale, forward the port (for example,
+`ssh -L 8756:127.0.0.1:8756 YOUR_SERVER`) and open `http://127.0.0.1:8756`
+on the client machine. GitHub's loopback callback then returns through the same
+forward. Opening `localhost` is also supported: sign-in first redirects to the
+configured origin so its state cookie and callback use the same hostname.
+If the server restarts during sign-in, start again from the main page instead of
+refreshing the old callback URL.
+
+## Give an agent the URL
+
+For Luna or another agent running on the machine with the SSH forward, use:
+
+> Open http://127.0.0.1:8756, read the agent instructions, create one recorded
+> attempt, and play NetHack to the end. Report your actual tool/model metadata,
+> the attempt ID, and the result. Use only the player API.
+
+The agent reads `/player.md` and calls `POST /agent/start` with its metadata.
+The response supplies a player token and relative attempt path, but no owner
+token or seed. It can then read screens, send keys, and resume. You can sign in
+and watch the same attempt on the dashboard. Use a base URL reachable from the
+agent's own machine; `localhost` always refers to the machine running that agent.
+Contributor authentication and concurrent-attempt limits apply to agent starts.
+`POST /attempts` remains the owner-oriented API for existing integrations; agents
+are instructed to use `/agent/start` instead.
+
+## Where recordings live
+
+Container runs persist in the `nethack-runs` Podman volume, mounted at `/runs`.
+Find its host location with:
+
+```sh
+podman volume inspect nethack-runs --format '{{.Mountpoint}}'
+```
+
+Each attempt has an ID-named directory containing `events.jsonl` (consumed keys,
+checkpoints and lifecycle/audit events), `private.json` (seed and token hashes),
+`work/`, and immutable `snapshot-N/` session directories. After the first finished
+package download, `package/` contains `attempt.json` and `events.jsonl.gz`.
+Later requests are audited separately in `audit.jsonl`. `make down` and container
+replacement preserve this volume. Native runs use `--state` (default `runs/`).
+
+Asciicast files are produced explicitly by `nethack-run export`; the demos write
+them under `build/demo/` and `build/demo-save/`. The dashboard downloads the
+two-file trace package, not the private working directory.
+
 ## Play through the API
 
 Create an attempt:
 
 ```sh
-curl -sS -H 'Content-Type: application/json' http://127.0.0.1:8000/attempts \
+curl -sS -H 'Content-Type: application/json' http://127.0.0.1:8756/attempts \
   -d '{"player_type":"model","agent_tool":"Codex","model":null}'
 ```
 
@@ -101,8 +187,8 @@ bytes represented as JSON characters, with a maximum of 4096 per request.
 For a human terminal, set `NETHACK_OWNER_TOKEN` and run:
 
 ```sh
-./nethack-run play http://127.0.0.1:8000/attempts/ATTEMPT_ID
-./nethack-run watch http://127.0.0.1:8000/attempts/ATTEMPT_ID
+./nethack-run play http://127.0.0.1:8756/attempts/ATTEMPT_ID
+./nethack-run watch http://127.0.0.1:8756/attempts/ATTEMPT_ID
 ```
 
 The first `play` connection controls input; other connections watch. Ctrl-]
@@ -149,7 +235,7 @@ Use an HTTPS reverse proxy when exposing the server remotely.
 
 ```sh
 make test
-make demo                         # requires a running server on port 8000
+make demo                         # requires a running server on port 8756
 .venv/bin/python scripts/terminal_smoke.py  # real PTY play/watch clients
 make cross-platform-test PACKAGE=build/demo
 # Without host ARM/binfmt support (Debian/Ubuntu amd64):

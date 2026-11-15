@@ -1,0 +1,6 @@
+{
+  "client_id": "YOUR_GITHUB_OAUTH_CLIENT_ID",
+  "client_secret": "YOUR_GITHUB_OAUTH_CLIENT_SECRET",
+  "owner_ids": [273059],
+  "public_url": "http://127.0.0.1:8756"
+}

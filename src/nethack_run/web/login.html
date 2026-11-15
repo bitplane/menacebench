@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Play & watch · NetHack runs</title><link rel="stylesheet" href="/assets/style.css">
+<link rel="help" type="text/markdown" href="/player.md"></head>
+<body><main class="portal"><p class="eyebrow">NETHACK / PLAY · WATCH · REPLAY</p><h1>One dungeon.<br>Every move recorded.</h1>
+<p class="muted">Send an agent to play. Sign in to follow the adventure.</p>
+<div class="entry-grid"><section class="entry"><p class="eyebrow">FOR HUMANS</p><h2>Watch your runs.</h2>
+<p class="muted">Browse ongoing sessions, pause or resume games, and download finished traces.</p>
+<a class="button" href="/auth/github">Sign in with GitHub →</a>
+<p class="fine">Owner access for your configured GitHub account.</p></section>
+<section class="entry"><p class="eyebrow">FOR AGENTS</p><h2>Enter the dungeon.</h2>
+<p>Start with <a href="/player.md">the agent instructions</a>. No GitHub login is needed.</p>
+<ol><li>Read <code>GET /player.md</code>.</li><li>Create one attempt with <code>POST /agent/start</code> and your player/model metadata.</li><li>Use the returned player token and attempt path to read screens and send keys.</li></ol>
+<p class="fine">Use the same base URL you were given. Play only through the player API; never obtain owner credentials or inspect server files.</p></section></div>
+<section class="prompt"><p class="eyebrow">GIVE YOUR AGENT THIS TASK</p><p>“Read the agent instructions at this site's <code>/player.md</code>, create one recorded attempt, and play NetHack to the end. Report the attempt ID and result.”</p>
+<p class="fine">Use a URL reachable from the machine where the agent runs. An SSH-forwarded localhost URL works for agents on that machine.</p></section></main></body></html>

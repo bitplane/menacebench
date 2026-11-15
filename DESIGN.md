@@ -79,6 +79,23 @@ The response is plain text: the 24 screen lines followed by a status line with c
 
 Model players use `keys`, `screen`, and `resume`. Human players use `nethack-run play`, which connects a local terminal to the `tty` WebSocket as the controlling client. `nethack-run watch` connects read-only.
 
+The public main page also links agent instructions and offers GitHub sign-in for
+the human owner. An agent given only the base URL reads `/player.md`, then calls
+`POST /agent/start` with player metadata. This creates an attempt subject to the
+same contributor authentication and concurrency limits, returning only its player
+token and relative attempt path. The owner token is not returned through this
+bootstrap endpoint. An existing player token cannot create additional attempts.
+
+The browser dashboard authenticates the configured numeric GitHub account IDs
+using OAuth state and PKCE. Browser sessions are separate from attempt tokens,
+expire after seven days, and end on logout or server restart. The owner can list
+all attempts, see current screens and results, pause/resume, and download finished
+packages. Mutations require a same-origin CSRF token. Live seeds, private logs,
+token hashes, and snapshots are not exposed. OAuth credentials remain outside the
+image and repository; provider access tokens are used only to obtain identity.
+The canonical browser origin is configured explicitly so SSH-forwarded loopback
+login callbacks and cookies use the same hostname and port.
+
 The server records each key at the moment the game consumes it, not when a client sends it. Crash recovery covers both process failure and machine failure on storage that honors `fsync`. Before publishing a boundary screen or exit, the server flushes and `fsync`s the events needed to reproduce it. Snapshots and atomically published packages likewise require file and parent-directory synchronization. Recovery ignores an incomplete trailing log record and uses the complete surviving event prefix.
 
 This publication rule applies to `keys`, `screen`, `409` responses, and the `tty` WebSocket. Terminal output is buffered until the next input boundary or game exit and released only after the corresponding events are durable. While the game is advancing, reads return the latest published screen with a state indicating that it is not accepting input. Rebuilding a paused session does not stream replay output to clients; reconnecting terminal clients receive a fresh rendering of the recovered screen. A pause between boundaries is reconciled by replaying the durable keys to the next boundary or exit before publishing its recovered state and checkpoint.

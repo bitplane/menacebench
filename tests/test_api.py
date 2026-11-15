@@ -3,7 +3,7 @@ import io
 import json
 import os
 import tarfile
-from aiohttp import web, ClientSession, TCPConnector
+from aiohttp import web, ClientSession, TCPConnector, CookieJar
 from contextlib import asynccontextmanager
 import pytest
 
@@ -41,7 +41,7 @@ async def wire_client(server, path):
         await site.start()
         port = site._server.sockets[0].getsockname()[1]
         try:
-            async with ClientSession(base_url=f'http://127.0.0.1:{port}') as client:
+            async with ClientSession(base_url=f'http://127.0.0.1:{port}', cookie_jar=CookieJar(unsafe=True)) as client:
                 yield client
         finally:
             await runner.cleanup()

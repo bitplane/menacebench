@@ -14,7 +14,7 @@ from .engine import ROOT
 
 
 class Server:
-    def __init__(self, root, instance='local', contributors=None, concurrency=2, limits=None):
+    def __init__(self, root, instance='local', contributors=None, concurrency=2, limits=None, github_auth=None):
         self.root = Path(root); self.root.mkdir(parents=True, exist_ok=True)
         self.instance = instance
         self.contributors = contributors
@@ -25,6 +25,8 @@ class Server:
         self.creation_lock = asyncio.Lock()
         self.monitor_task = None
         self.state_lock = None
+        from .browser import Browser
+        self.browser = Browser(self, github_auth)
 
     async def start(self, app):
         import fcntl
@@ -94,7 +96,10 @@ class Server:
                 attempt, role = known
                 await asyncio.to_thread(attempt.audit,request.method,request.path,role,status)
 
-    async def create(self, request):
+    async def agent_start(self, request):
+        return await self.create(request, player_only=True)
+
+    async def create(self, request, player_only=False):
         token = request.headers.get('Authorization','').removeprefix('Bearer ')
         contributor = None
         if self.contributors is not None:
@@ -117,6 +122,11 @@ class Server:
             a, owner, player = await asyncio.to_thread(Attempt.create, self.root, metadata, self.instance, contributor, self.limits)
             self.attempts[a.id] = a
             self.index_tokens(a)
+        if player_only:
+            await asyncio.to_thread(a.audit, request.method, request.path, 'agent-start', 201)
+            return web.json_response({'id':a.id, 'player_token':player,
+                                      'attempt_path':'/attempts/'+a.id,
+                                      'instructions_path':'/player.md', 'status':a.status()}, status=201)
         return web.json_response({'id':a.id,'owner_token':owner,'player_token':player,'status':a.status()}, status=201)
 
     async def route(self, request):
@@ -232,10 +242,13 @@ class Server:
         return web.FileResponse(ROOT/'PLAYER.md')
 
     def app(self):
-        app = web.Application(client_max_size=32768,middlewares=[self.audit_requests])
+        from .browser import browser_headers
+        app = web.Application(client_max_size=32768,middlewares=[browser_headers,self.audit_requests])
         app.on_startup.append(self.start); app.on_cleanup.append(self.stop)
         app.router.add_post('/attempts',self.create)
+        app.router.add_post('/agent/start',self.agent_start)
         app.router.add_get('/player.md',self.player_instructions)
         app.router.add_route('*','/attempts/{id}',self.route)
         app.router.add_route('*','/attempts/{id}/{action}',self.route)
+        self.browser.routes(app)
         return app

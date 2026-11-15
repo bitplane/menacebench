@@ -1,6 +1,12 @@
 PYTHON ?= .venv/bin/python
 VENV_PYTHON ?= python3.12
 NETHACK_CONTAINER_ENGINE ?= podman
+PORT ?= 8756
+GITHUB_AUTH_CONFIG ?= $(wildcard config/github-auth.local.json)
+comma := ,
+CONTAINER_NAME ?= nethack-run
+RUN_FLAGS = -p 127.0.0.1:$(PORT):8000 --mount type=volume,src=nethack-runs,dst=/runs $(if $(GITHUB_AUTH_CONFIG),--secret nethack-github-auth$(comma)target=/run/github-auth.json$(comma)uid=1000$(comma)gid=1000$(comma)mode=0400) -e NETHACK_IMAGE_DIGEST="$$(cat build/image-id)"
+SERVER_ARGS = $(if $(GITHUB_AUTH_CONFIG),serve --host 0.0.0.0 --port 8000 --state /runs --github-auth /run/github-auth.json)
 export NETHACK_CONTAINER_ENGINE
 .PHONY: setup test verify-build
 setup:
@@ -18,13 +24,26 @@ image:
 	$(NETHACK_CONTAINER_ENGINE) build --platform linux/amd64 -t localhost/nethack-run:local .
 	python3 scripts/record_image.py localhost/nethack-run:local
 
-.PHONY: run
-run:
-	$(NETHACK_CONTAINER_ENGINE) run --rm -p 127.0.0.1:8000:8000 --mount type=volume,src=nethack-runs,dst=/runs -e NETHACK_IMAGE_DIGEST="$$(cat build/image-id)" "$$(cat build/image-id)"
+.PHONY: run up down logs auth-secret
+auth-secret:
+	$(if $(GITHUB_AUTH_CONFIG),$(NETHACK_CONTAINER_ENGINE) secret create --replace nethack-github-auth "$(abspath $(GITHUB_AUTH_CONFIG))",@true)
+
+run: auth-secret
+	$(NETHACK_CONTAINER_ENGINE) run --rm $(RUN_FLAGS) "$$(cat build/image-id)" $(SERVER_ARGS)
+
+up: auth-secret
+	$(NETHACK_CONTAINER_ENGINE) run --detach --replace --name $(CONTAINER_NAME) $(RUN_FLAGS) "$$(cat build/image-id)" $(SERVER_ARGS)
+	@printf 'NetHack dashboard: http://127.0.0.1:$(PORT)\n'
+
+down:
+	$(NETHACK_CONTAINER_ENGINE) stop $(CONTAINER_NAME)
+
+logs:
+	$(NETHACK_CONTAINER_ENGINE) logs --tail 100 $(CONTAINER_NAME)
 
 .PHONY: demo cross-platform-test cross-platform-user-test
 demo:
-	$(PYTHON) scripts/demo.py
+	$(PYTHON) scripts/demo.py --url http://127.0.0.1:$(PORT)
 
 cross-platform-test:
 	test -n "$(PACKAGE)"

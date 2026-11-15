@@ -61,9 +61,10 @@ def main(argv=None):
     sub=parser.add_subparsers(dest='command',required=True)
     serve=sub.add_parser('serve')
     serve.add_argument('--state',type=Path,default=Path('runs'))
-    serve.add_argument('--host',default='127.0.0.1');serve.add_argument('--port',type=int,default=8000)
+    serve.add_argument('--host',default='127.0.0.1');serve.add_argument('--port',type=int,default=8756)
     serve.add_argument('--unix-socket');serve.add_argument('--instance',default='local')
     serve.add_argument('--contributors',type=Path,help='JSON mapping SHA-256 contributor-key hashes to contributor names')
+    serve.add_argument('--github-auth',type=Path,help='Private GitHub OAuth configuration JSON for the owner dashboard')
     serve.add_argument('--concurrency',type=int,default=2)
     serve.add_argument('--idle',type=float,default=1800)
     serve.add_argument('--duration',type=float,default=86400)
@@ -80,7 +81,8 @@ def main(argv=None):
         limits={k:getattr(args,k) for k in ('idle','duration','events','expiry')}
         if any(value<=0 for value in limits.values()) or args.concurrency<1:parser.error('Limits must be positive')
         contributors=json.loads(args.contributors.read_text()) if args.contributors else None
-        server=Server(args.state,args.instance,contributors,args.concurrency,limits)
+        github_auth=json.loads(args.github_auth.read_text()) if args.github_auth else None
+        server=Server(args.state,args.instance,contributors,args.concurrency,limits,github_auth)
         web.run_app(server.app(),host=args.host if not args.unix_socket else None,
                     port=args.port if not args.unix_socket else None,path=args.unix_socket,access_log=None)
     elif args.command in ('replay','export'):

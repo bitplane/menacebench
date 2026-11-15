@@ -7,15 +7,16 @@ RUN printf '%s\n' 'deb [check-valid-until=no] https://snapshot.debian.org/archiv
     && rm -rf /var/lib/apt/lists/*
 RUN mkdir /runtime-libs && cp -L /lib/*-linux-gnu/libncurses.so.6 /lib/*-linux-gnu/libtinfo.so.6 /runtime-libs/
 WORKDIR /opt/nethack-run
-COPY scripts scripts
+COPY scripts/setup.py scripts/setup.py
 COPY patches patches
-COPY config config
+COPY config/nethackrc config/sysconf config/official-images.json config/
 RUN python scripts/setup.py
 COPY requirements.lock requirements.lock
 RUN python -m venv .venv && .venv/bin/pip install --require-hashes -r requirements.lock
 COPY src src
 COPY PLAYER.md DESIGN.md LICENSE-NetHack nethack-run pyproject.toml ./
 COPY tests tests
+COPY scripts scripts
 RUN NETHACK_TEST_LIVE=1 .venv/bin/python -m pytest -q
 
 FROM python:3.12-slim-bookworm@sha256:935c3c5b12357a7e10caa9c1e6ca5692344d97cf229832ef584be2cec9fc03df
@@ -26,7 +27,7 @@ COPY --from=build /opt/nethack-run/build/build.json build/build.json
 COPY --from=build /runtime-libs /opt/nethack-run/lib
 ENV LD_LIBRARY_PATH=/opt/nethack-run/lib
 COPY src src
-COPY config config
+COPY config/nethackrc config/sysconf config/official-images.json config/
 COPY PLAYER.md DESIGN.md LICENSE-NetHack nethack-run pyproject.toml ./
 RUN mkdir /runs && chown 1000:1000 /runs
 USER 1000:1000
@@ -34,4 +35,4 @@ ENV PYTHONDONTWRITEBYTECODE=1
 RUN PYTHONPATH=src .venv/bin/python -c 'import tempfile; from pathlib import Path; from nethack_run.engine import Game, clean_directory; t=tempfile.TemporaryDirectory(); p=Path(t.name)/"game"; clean_directory(p); g=Game(p,42); assert g.frame and g.boundary==1; g.close(); t.cleanup()'
 EXPOSE 8000
 ENTRYPOINT ["./nethack-run"]
-CMD ["serve", "--host", "0.0.0.0", "--state", "/runs"]
+CMD ["serve", "--host", "0.0.0.0", "--port", "8000", "--state", "/runs"]

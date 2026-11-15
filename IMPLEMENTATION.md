@@ -26,7 +26,7 @@ outside this work.
 
 ## Checks completed here
 
-The pinned amd64 image passed the full **86-test** suite in 25.66 seconds with
+The pinned amd64 image passed the full **100-test** suite in 25.97 seconds with
 real TCP/WebSocket transport and worker threads. The native live API corpus
 passed **27 tests** in 22.61 seconds, covering all races/genders/alignments and a
 long run through death, with mid-name and inventory-menu pause/recovery.
@@ -67,6 +67,25 @@ for restricted environments. Concurrent interruption also uses real threads.
   including moves submitted over HTTP. Output is in `build/terminal-results.txt`.
 - Export opened and rendered successfully in the official asciinema-player
   3.18.0. Local preview assets and page are in `build/demo`; they are not published.
+
+## Local browser and agent onboarding
+
+The server now provides a public human/agent landing page, GitHub owner login,
+and a sessions dashboard. Owner access uses numeric GitHub account IDs, PKCE,
+browser-bound single-use OAuth state, HttpOnly cookies, and CSRF protection.
+The sign-in entry normalizes localhost aliases to the configured callback origin.
+The user confirmed real GitHub login works through the SSH-forwarded
+`http://127.0.0.1:8756` address.
+
+`make up` starts/replaces the named rootless container in the background on port
+8756; `make down` preserves the existing recordings volume. OAuth configuration
+is excluded from Git and image builds and mounted using a Podman secret.
+
+The main page links `/player.md`. Agents can use `POST /agent/start` to receive
+only a player token and attempt path; they do not need human login or owner
+credentials. Tests cover contributor limits, owner-route rejection, invalid
+login state, expiry, wrong accounts, and cross-origin mutations. A live URL-only
+onboarding smoke test also created, played, and finished an attempt successfully.
 
 ## ARM comparison
 

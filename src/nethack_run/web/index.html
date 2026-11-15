@@ -1,0 +1,13 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>NetHack runs</title><link rel="stylesheet" href="/assets/style.css"><script src="/assets/app.js" defer></script></head>
+<body><header><a href="/" class="brand">@ <span>NetHack runs</span></a><div><span id="account"></span> <button id="logout" class="quiet">Sign out</button></div></header>
+<main><p class="eyebrow">YOUR LOCAL RUN ARCHIVE</p><h1>Into the dungeon.</h1>
+<p class="muted">Ongoing games and recorded attempts, in one place. <a href="/player.md">Agent instructions →</a></p><p id="error" role="alert"></p>
+<div class="toolbar"><label for="filter">Show</label><select id="filter"><option value="all">All attempts</option><option value="active">Ongoing</option><option value="finished">Finished</option></select><span id="count" class="muted"></span><span class="live">● Updates every second</span></div>
+<div class="layout"><section aria-label="Attempts"><div id="runs"></div></section>
+<section id="detail" hidden><div class="detail-heading"><div><p class="eyebrow">SELECTED ATTEMPT</p><h2 id="title"></h2></div><span id="state" class="badge"></span></div>
+<p id="metadata" class="muted"></p><pre id="screen" aria-label="Current game screen" tabindex="0"></pre>
+<div class="actions"><button id="pause">Pause</button><button id="resume">Resume</button><button id="download">Download trace package</button></div>
+<p id="result"></p><p id="package-note" class="fine" hidden>Downloading finalizes this package, including its current usage report.</p><p id="identifier" class="fine"></p></section></div>
+<p class="fine">Traces persist in the server’s state directory. Live attempts keep their seeds private.</p></main></body></html>

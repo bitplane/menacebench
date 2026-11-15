@@ -83,5 +83,5 @@ async def main(url):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--url', default='http://127.0.0.1:8000')
+    parser.add_argument('--url', default='http://127.0.0.1:8756')
     asyncio.run(main(parser.parse_args().url))
