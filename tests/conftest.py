@@ -1,4 +1,10 @@
 """Stable dungeon fixtures for tests which send scripted input sequences."""
+import os
+
+# The in-memory test transport cannot sendfile(); aiohttp reads this flag when
+# web_fileresponse is first imported, so set it before any test module loads.
+os.environ.setdefault('AIOHTTP_NOSENDFILE', '1')
+
 import pytest
 
 
