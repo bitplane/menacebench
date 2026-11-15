@@ -18,14 +18,16 @@ def test_averages_groups_versions_and_eligibility():
             run('A', 'high', 1000, version='0.0.1'), run('A', 'high', None),
             run('A', 'high', 9999, state='running'), run('Human', None, 9999, kind='human'),
             run(None, None, 20, version=None)]
-    result = leaderboard(runs, '0.0.4')
+    result = leaderboard(runs, '0.0.4', humans=False)
     assert result['scored_attempts'] == 4 and result['excluded_attempts'] == 1
     assert [(r['model'], r['reasoning_effort'], r['average_score']) for r in result['groups']] == [
         ('A', 'low', 80), ('B', 'high', 60), ('A', 'high', 50)]
     assert result['groups'][2]['attempt_count'] == 2
     assert result['groups'][2]['best_score'] == 100
     assert result['groups'][1]['ascensions'] == 1
-    assert leaderboard(runs)['groups'][0]['average_score'] == 1100/3
+    assert leaderboard(runs, humans=False)['groups'][0]['average_score'] == 1100/3
+    # Humans share the table by default.
+    assert leaderboard(runs, '0.0.4')['groups'][0]['player_type'] == 'human'
     unknown = leaderboard(runs, 'unknown')['groups'][0]
     assert unknown['model'] is None and unknown['reasoning_effort'] is None
     assert leaderboard(runs, 'missing')['groups'] == []
@@ -84,3 +86,26 @@ def test_model_formatting_groups_with_stable_readable_display():
     assert high['average_score'] == 20 and high['attempt_count'] == 2
     assert variants[1]['player']['model'] == 'gpt 6 luna'
     assert leaderboard(variants, '0.0.4') == result
+
+
+def human(login, account, score, outcome='death', state='finished', at=0):
+    return {'harness_version': '0.0.4', 'state': state, 'outcome': outcome, 'last_activity': at, 'id': str(at),
+            'result': {'score': score} if score is not None else None, 'human_github_id': account,
+            'player': {'player_type': 'human', 'github_login': login}}
+
+
+def test_humans_share_the_leaderboard_grouped_by_github_account():
+    runs = [run('A', 'high', 50), human('alice', 1, 100, at=1), human('Alice-Renamed', 1, 20, 'quit', at=2),
+            human('bob', 2, 50, 'ascended'), human('carol', 3, 999, state='running'), human('dave', 4, None),
+            human(None, None, 10)]
+    result = leaderboard(runs)
+    rows = [(r['player_type'], r['player'], r['average_score'], r['rank']) for r in result['groups']]
+    assert rows == [('human', 'Alice-Renamed', 60, 1), ('model', 'A', 50, 2), ('human', 'bob', 50, 2),
+                    ('human', None, 10, 4)]
+    alice = result['groups'][0]
+    assert alice['github_id'] == 1 and alice['attempt_count'] == 2 and alice['best_score'] == 100
+    assert alice['model'] is None and alice['reasoning_effort'] is None
+    assert result['groups'][2]['ascensions'] == 1
+    assert result['scored_attempts'] == 5 and result['excluded_attempts'] == 1
+    without = leaderboard(runs, humans=False)
+    assert [r['player'] for r in without['groups']] == ['A'] and without['excluded_attempts'] == 0

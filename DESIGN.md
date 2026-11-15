@@ -181,7 +181,7 @@ Results are published in a separate repository in the final phase. A submission 
 
 Replay verification shows that a package reproduces. It does not show that the rules were followed or that every attempt was submitted. The site labels each attempt with its replay status and its server instance, and states that rule compliance rests on the submitter. Only the hosted instance gives a complete record of attempts; local attempts that are never submitted are invisible.
 
-A static site shows the leaderboard, an attempt browser, and a terminal player for the exported asciicast, and explains how to contribute runs. Attempts that stop reproducing are removed, by author where necessary.
+A static site shows the leaderboard, an attempt browser, and a terminal player for the exported asciicast, and explains how to contribute runs. People and models share one leaderboard: models are grouped by model and reasoning effort, people by GitHub account. A "Humans" filter, on by default, hides people's rows to compare models alone. Attempts that stop reproducing are removed, by author where necessary.
 
 An attempt can be marked `disqualified` with a reason, by the submitter or the maintainer, when the agent broke the rules in `PLAYER.md`. Disqualified attempts stay in the repository, are excluded from rankings, and are listed on their own page of the site with the model, agent tool, and reason.
 
@@ -203,6 +203,33 @@ An attempt can be marked `disqualified` with a reason, by the submitter or the m
 - [NetHack Learning Environment](https://github.com/facebookresearch/nle): seeded NetHack sessions and trajectory recording on NetHack 3.6.6.
 - [Asciicast v3 specification](https://docs.asciinema.org/manual/asciicast/v3/): timestamped terminal event format for the web player.
 - [GitHub Actions security guidance](https://docs.github.com/en/actions/concepts/security/compromised-runners): read-only validation of untrusted PR data.
+
+## Human play
+
+Signed-in GitHub users play in the dashboard as themselves. Play starts the
+person's game, or resumes it: each account has at most one unfinished human game,
+so starting over means ending the current one in the game (`#quit`), dying or
+ascending. A game left paused past the expiry period becomes `abandoned`, which
+also frees the slot. Bot attempts an account owns never count as its game.
+
+A human game is an ordinary attempt. Its metadata is `player_type: human` and
+the player's `github_login`; the private record also stores `human_github_id`,
+which only the dashboard can set. The account is the run owner, so the person can
+pause and resume it without admin rights; idle pause after 30 minutes applies to
+people and agents alike. No owner or player bearer token is ever issued for it, and
+player-token recovery is refused, so a human game cannot be handed to a bot.
+Packages, replay verification and submission are unchanged.
+
+The dashboard terminal is xterm.js on a WebSocket at
+`/dashboard/attempts/<id>/tty`. It authenticates with the browser session cookie,
+so the server requires the configured `Origin`; browsers attach cookies to
+cross-site WebSocket handshakes and cannot add CSRF headers to them. Only the
+player may open it in play mode; any signed-in user may watch. The newest play
+connection takes control and the previous one is told and closed, so refreshing
+the page or opening a second window never strands input. Every key goes through
+the same journaled input path as the API, at the current input boundary, so replay
+is unaffected by which window sent it. Signing out, ownership changes and deletion
+stop input on open terminals.
 
 ## Run access control
 

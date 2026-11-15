@@ -91,7 +91,12 @@ verification.
 ## Browser login
 
 The dashboard at `http://127.0.0.1:8756` lets anyone with a GitHub account view
-ongoing and completed attempts, current screens, model scores, and replays.
+ongoing and completed attempts, current screens, the leaderboard, and replays,
+and play NetHack themselves: **Play NetHack** starts your game in an in-page
+terminal, or continues it. Each account has one unfinished game at a time; quit in
+the game (`#quit`) to start over. Refreshing or opening another window moves
+control to the newest window. Human games are ordinary attempts with
+verifiable packages and replays.
 Run owners can pause/resume their own games and download their trace packages;
 configured server admins can manage every run. Select a completed attempt to play its asciinema recording, seek,
 change playback speed, or download the `.cast` file. Recordings are prepared on
@@ -329,16 +334,17 @@ The tool locks the store, backs up every affected file, updates creation records
 and any existing package checksums, and preserves seeds, tokens, and game events.
 Keep the backup private: it contains the original private attempt data.
 
-## Model leaderboard and guidebook
+## Leaderboard and guidebook
 
-The owner dashboard ranks model/reasoning-effort groups by average recorded
-score. The version selector applies to both the leaderboard and attempt list;
+The dashboard ranks model/reasoning-effort groups and human players (one row per
+GitHub account, labelled with the latest login) by average recorded score. Untick
+**Humans** (`?humans=0` on `/dashboard/leaderboard`) to compare models only. The version selector applies to both the leaderboard and attempt list;
 the ongoing/finished selector applies only to the list. All versions combines
 results across releases. Each row shows the scored-attempt count, best score,
 and ascensions. Model names are grouped case-insensitively with spaces and punctuation removed;
 reasoning effort remains the reported setting. The first completed matching
 attempt supplies a readable model name, shared across its effort groups. Raw
-reported names remain unchanged in traces. Missing values are shown as unknown. Human attempts, ongoing games, and completed
+reported names remain unchanged in traces. Missing values are shown as unknown. Ongoing games and completed
 attempts without a recorded score are excluded; scored quits and zero scores
 are included. Tied averages share a rank. Results are rebuilt from the durable
 attempt records, so they survive restarts without sharing NetHack score files.

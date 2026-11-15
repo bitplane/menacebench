@@ -70,14 +70,17 @@ class Attempt:
             elif e['type'] == 'checkpoint' and e.get('character'): self.character = e['character']
 
     @classmethod
-    def create(cls, root, metadata, instance, contributor=None, limits=None, owner_github_id=None):
-        github_id(owner_github_id)
+    def create(cls, root, metadata, instance, contributor=None, limits=None, owner_github_id=None,
+               human_github_id=None):
+        github_id(owner_github_id); github_id(human_github_id)
         identifier = str(uuid.uuid4())
         path = root/identifier; path.mkdir(mode=0o700)
         owner, player = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
         info = {'harness_version': VERSION, 'id': identifier, 'seed': secrets.token_hex(32), 'metadata': metadata,
                 'instance': instance, 'contributor': contributor, 'limits': limits or {},
                 'owner_github_id': owner_github_id, 'initial_owner_github_id': owner_github_id,
+                # Set only for games a signed-in person plays from the dashboard.
+                'human_github_id': human_github_id,
                 'player_token_generation': 0, 'access_audit': [],
                 'owner_hash': hashlib.sha256(owner.encode()).hexdigest(),
                 'player_hash': hashlib.sha256(player.encode()).hexdigest(),
@@ -340,7 +343,8 @@ class Attempt:
         """Public, session-independent row shared by the dashboard, index and leaderboard."""
         return self.status() | {'harness_version': self.info.get('harness_version'), 'character': self.character,
                                 'player': self.info['metadata'], 'last_activity': self.last_activity,
-                                'session_seconds': self.clock(), 'owner_github_id': self.info.get('owner_github_id')}
+                                'session_seconds': self.clock(), 'owner_github_id': self.info.get('owner_github_id'),
+                                'human_github_id': self.info.get('human_github_id')}
 
     def screen(self, consumed=0, discarded=0):
         status = self.status() | {'consumed': consumed, 'discarded': discarded,

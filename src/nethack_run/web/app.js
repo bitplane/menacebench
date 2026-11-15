@@ -10,9 +10,10 @@ async function api(path, options = {}) {
   if (!response.ok) throw new Error(await response.text());
   return response;
 }
-const name = a => a.character?.name || a.player.model || 'Character creation';
+const name = a => a.character?.name || a.player.model || a.player.github_login || 'Character creation';
 const label = a => a.state === 'finished' ? a.outcome : a.state;
 const playerLabel = a => {
+  if (a.player.player_type === 'human' && a.player.github_login) return `${a.player.github_login} (human)`;
   const player = a.player.model || a.player.player_type || 'Unknown player';
   return a.player.player_type === 'model' || a.player.model || a.player.reasoning_effort
     ? `${player} · Reasoning: ${a.player.reasoning_effort || 'unknown'}` : player;
@@ -36,21 +37,27 @@ function showLeaderboard(data) {
   $('leaderboard-rows').replaceChildren();
   $('leaderboard-table').hidden = data.groups.length === 0;
   $('leaderboard-summary').textContent = data.groups.length
-    ? `${data.scored_attempts} scored attempts · ${data.groups.length} model / effort groups · ${data.excluded_attempts} completed attempts without scores`
-    : `No scored model attempts for this version. ${data.excluded_attempts} completed attempts have no recorded score.`;
+    ? `${data.scored_attempts} scored attempts · ${data.groups.length} groups · ${data.excluded_attempts} completed attempts without scores`
+    : `No scored attempts for this version. ${data.excluded_attempts} completed attempts have no recorded score.`;
   for (const group of data.groups) {
-    const row = document.createElement('tr');
-    for (const value of [group.rank, group.model || 'Unknown model', group.reasoning_effort || 'Unknown',
+    const row = document.createElement('tr'), human = group.player_type === 'human';
+    for (const value of [group.rank, human ? group.player || 'Unknown person' : group.model || 'Unknown model',
+                         human ? '—' : group.reasoning_effort || 'Unknown',
                          scoreFormat.format(group.average_score), group.attempt_count,
                          scoreFormat.format(group.best_score), group.ascensions]) {
       const cell = document.createElement('td'); cell.textContent = value; row.append(cell);
     }
+    if (human) { const tag = document.createElement('span'); tag.className = 'tag'; tag.textContent = 'human'; row.children[1].append(tag); }
     $('leaderboard-rows').append(row);
   }
 }
 function showDetails(a) {
   $('attempt-details').replaceChildren();
-  for (const [label, value] of [
+  const human = a.player.player_type === 'human' && a.human_github_id != null;
+  for (const [label, value] of human ? [
+    ['Player', a.player.github_login || 'Unknown'], ['Player GitHub ID', a.human_github_id],
+    ['Harness version', versionLabel(a)], ['Attempt ID', a.id],
+  ] : [
     ['Run owner GitHub ID', a.owner_github_id ?? 'Unassigned'],
     ['Harness version', versionLabel(a)], ['Model', a.player.model || 'Unknown'],
     ['Agent tool', a.player.agent_tool || 'Unknown'], ['Tool version', a.player.tool_version || 'Unknown'],
@@ -103,12 +110,16 @@ async function refresh() {
     if (epoch !== refreshEpoch) return;
     updateVersions(all);
     const filter = $('filter').value, version = $('version-filter').value;
-    const board = await (await api('/dashboard/leaderboard' + (version === 'all' ? '' : '?version=' + encodeURIComponent(version)))).json();
+    const query = new URLSearchParams();
+    if (version !== 'all') query.set('version', version);
+    if (!$('humans-filter').checked) query.set('humans', '0');
+    const board = await (await api('/dashboard/leaderboard' + (query.toString() ? '?' + query : ''))).json();
     if (epoch !== refreshEpoch) return;
     showLeaderboard(board);
     const runs = all.filter(a => ($('owner-filter').value !== 'mine' || a.is_mine) && (version === 'all' || versionKey(a) === version) &&
       (filter === 'all' || (filter === 'active' ? a.state !== 'finished' : a.state === 'finished')));
     $('count').textContent = `${runs.length} ${runs.length === 1 ? 'attempt' : 'attempts'}`;
+    $('play').textContent = all.some(a => a.permissions.play) ? 'Continue your game' : 'Play NetHack';
     if (!runs.some(a => a.id === selected)) selected = runs[0]?.id || null;
     if (credentials && credentials.id !== selected) clearCredentials();
     const signature = JSON.stringify(runs.map(a => [a.id, name(a), label(a), a.session, a.key_count, a.player, a.harness_version, a.owner_github_id, a.permissions])) + selected;
@@ -125,15 +136,16 @@ async function refresh() {
       }
     }
     $('detail').hidden = !selected;
-    if (!selected) showReplay(null);
+    if (!selected) { showReplay(null); showTerminal(null); }
     if (selected) {
       const id = selected, a = await (await api('/dashboard/attempts/' + id)).json();
       if (epoch !== refreshEpoch || selected !== id) return;
       $('title').textContent = name(a); $('state').textContent = label(a);
       $('metadata').textContent = `${playerLabel(a)} · ${a.character ? [a.character.role, a.character.race, a.character.gender, a.character.align].join(' / ') : 'Choosing a character'} · Session ${a.session} · ${duration(a.session_seconds)} · Last activity ${new Date(a.last_activity * 1000).toLocaleString()}`;
       $('screen').textContent = a.screen || 'This session has ended. Its consumed keys are preserved in the trace.';
-      $('screen').hidden = a.state === 'finished';
+      $('screen').hidden = a.state === 'finished' || a.permissions.play;
       showReplay(a);
+      showTerminal(a);
       permissions = a.permissions;
       if (!permissions.recover) clearCredentials();
       $('recover-player').hidden = !permissions.recover;
@@ -148,6 +160,71 @@ async function refresh() {
     $('error').textContent = '';
   } catch (e) { if (epoch === refreshEpoch) $('error').textContent = e.message; }
 }
+// Live play. One WebSocket per selected game; the newest window takes control.
+let terminal = null, socket = null, socketId = null, reconnectTimer = null;
+function playStatus(text, takeControl = false) {
+  $('play-status').textContent = text; $('take-control').hidden = !takeControl;
+}
+function closeSocket() {
+  clearTimeout(reconnectTimer); reconnectTimer = null;
+  if (socket) { const old = socket; socket = null; old.onclose = null; old.close(); }
+}
+function showTerminal(attempt) {
+  const id = attempt?.permissions?.play ? attempt.id : null;
+  $('play-section').hidden = !id;
+  if (id === socketId) return;
+  closeSocket(); socketId = id;
+  if (!id) return;
+  if (!terminal) {
+    terminal = new Terminal({cols: 80, rows: 24, cursorBlink: true, convertEol: false, scrollback: 0,
+      fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 15,
+      theme: {background: '#080e0a', foreground: '#d5e6c9', cursor: '#b6d78b'}});
+    terminal.open($('terminal'));
+    // Keys are only accepted from the window in control; the server enforces it too.
+    terminal.onData(data => { if (socket?.readyState === WebSocket.OPEN && socket.controlling) socket.send(data); });
+  }
+  terminal.reset();
+  connect(id);
+}
+function connect(id) {
+  closeSocket();
+  if (socketId !== id) return;
+  playStatus('Connecting…');
+  const ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/dashboard/attempts/${id}/tty?mode=play`);
+  ws.binaryType = 'arraybuffer'; ws.controlling = false; socket = ws;
+  ws.onmessage = event => {
+    if (typeof event.data !== 'string') { terminal.write(new Uint8Array(event.data)); return; }
+    const message = JSON.parse(event.data);
+    ws.controlling = message.controlling;
+    if (message.error) playStatus(message.error);
+    else if (message.taken_over) playStatus('This game is open in another window.', true);
+    else if (message.status?.state === 'finished') playStatus('Game over. The recording appears below once it is prepared.');
+    else if (message.controlling) playStatus(message.status?.state === 'paused' ? 'Paused. Press a key to continue.' : 'Playing.');
+  };
+  ws.onopen = () => terminal.focus();
+  ws.onclose = event => {
+    if (socket !== ws) return;
+    socket = null;
+    if (event.code === 4001) playStatus('This game is open in another window.', true);
+    else if (event.code === 1008) playStatus('Signed out or access changed. Reload to continue.');
+    else if (event.code === 1013) { playStatus('Connection was too slow. Reconnecting…'); reconnectTimer = setTimeout(() => connect(id), 2000); }
+    else { playStatus('Disconnected. Reconnecting…'); reconnectTimer = setTimeout(() => connect(id), 2000); }
+  };
+}
+$('take-control').onclick = () => { if (socketId) connect(socketId); };
+$('play').onclick = async () => {
+  if (busy) return;
+  busy = true;
+  try {
+    const game = await (await api('/dashboard/play', {method: 'POST'})).json();
+    $('filter').value = 'all'; $('owner-filter').value = 'all'; $('version-filter').value = 'all';
+    selected = game.id; lastList = ''; socketId = null; $('error').textContent = '';
+  } catch (e) { $('error').textContent = e.message; }
+  finally { busy = false; }
+  await refresh();
+  if (terminal && socketId) terminal.focus();
+};
+
 async function action(kind) {
   if (!permissions.manage || !selected || busy) return;
   busy = true;
@@ -217,6 +294,7 @@ $('pause').onclick = () => action('pause'); $('resume').onclick = () => action('
 $('filter').onchange = refresh;
 $('version-filter').onchange = refresh;
 $('owner-filter').onchange = refresh;
+$('humans-filter').onchange = refresh;
 $('replay-retry').onclick = () => { replayId = null; refresh(); };
 $('logout').onclick = async () => { try { await api('/auth/logout', {method: 'POST'}); location.assign('/'); } catch (e) { $('error').textContent = e.message; } };
 (async () => { try { const me = await (await api('/dashboard/me')).json(); csrf = me.csrf; isAdmin = me.role === 'admin'; $('account').textContent = `${me.login} · GitHub ID ${me.id}${isAdmin ? ' · Admin' : ''}`; $('viewer-note').hidden = isAdmin; await refresh(); setInterval(refresh, 1000); } catch (e) { $('error').textContent = e.message; } })();

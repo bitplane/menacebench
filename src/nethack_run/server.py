@@ -319,6 +319,35 @@ class Server:
                                       'instructions_path':'/player.md', 'owner_github_id':owner_github_id, 'status':a.status()}, status=201)
         return web.json_response({'id':a.id,'owner_token':owner,'player_token':player,'owner_github_id':owner_github_id,'status':a.status()}, status=201)
 
+    def human_game(self, github_id):
+        """A person's one unfinished dashboard game. Unfinished attempts are always loaded."""
+        return next((a for a in self.attempts.values() if not a.deleted and a.state != 'finished'
+                     and a.info.get('human_github_id') == github_id), None)
+
+    async def play(self, github_id, login):
+        """Return the person's unfinished game, resumed, or start their only one."""
+        async with self.admission_lock:
+            a = self.human_game(github_id)
+            if a is None:
+                contributor = 'github:'+str(github_id)
+                self.check_capacity(contributor)
+                a, _, _ = await asyncio.to_thread(
+                    Attempt.create, self.root, {'player_type': 'human', 'github_login': login},
+                    self.instance, contributor, self.limits, github_id, github_id)
+                self.attempts[a.id] = a
+                self.used[a.id] = time.monotonic()
+                self.index_tokens(a)
+                await asyncio.to_thread(self.index.put, a)
+                return a, True
+        async with self.access[a.id].operation():
+            if a.deleted: raise Conflict('Attempt was deleted')
+            if a.state in {'paused', 'saved'}:
+                try: await self.resume_attempt(a)
+                except Conflict:
+                    # Another window resumed it first.
+                    if a.state != 'running': raise
+        return a, False
+
     def check_capacity(self, contributor):
         active = sum(a.info['contributor'] == contributor and a.state == 'running'
                      for a in self.attempts.values())
@@ -346,7 +375,7 @@ class Server:
         if action == 'tty':
             async with self.access[a.id].operation():
                 if request.method != 'GET' or a.role(token) != 'owner': raise web.HTTPForbidden()
-            return await self.terminal(request, a, role, token)
+            return await self.terminal(request, a, role, lambda: a.role(token) == 'owner')
         disposition = 500
         try:
             async with self.access[a.id].operation():
@@ -388,18 +417,29 @@ class Server:
             disposition = 400
             return web.Response(status=400,text=str(error))
 
-    async def terminal(self, request, a, role, token):
+    async def terminal(self, request, a, role, authorized, takeover=False):
+        """Stream an attempt's terminal; at most one connection controls input.
+
+        ``authorized`` is rechecked before every key, so revoked credentials stop
+        input immediately. With ``takeover`` a new play connection replaces the
+        controller (a refreshed or second browser tab) instead of only watching.
+        """
         ws = web.WebSocketResponse(max_msg_size=4096, heartbeat=30)
         await ws.prepare(request)
         self.terminals[a.id].add(ws)
-        controlling = request.query.get('mode')=='play' and a.controller is None
-        if controlling: a.controller = ws
+        previous = None
+        if request.query.get('mode')=='play' and (a.controller is None or takeover):
+            previous, a.controller = a.controller, ws
+        if previous is not None:
+            with contextlib.suppress(ConnectionError, RuntimeError):
+                await previous.send_json({'controlling': False, 'status': a.status(), 'taken_over': True})
+                await previous.close(code=4001, message=b'Control moved to another window')
         loop = asyncio.get_running_loop()
         queue = asyncio.Queue(maxsize=128)
         def receive_output(data):
             # Capture the status at the durable publication boundary, before
             # the worker can consume another key. Every watcher needs it too.
-            packet = (data, {'controlling': controlling, 'status': a.status()})
+            packet = (data, {'controlling': a.controller is ws, 'status': a.status()})
             def put():
                 if not queue.full(): queue.put_nowait(packet)
                 else: asyncio.create_task(ws.close(code=1013,message=b'Slow terminal client'))
@@ -413,7 +453,7 @@ class Server:
         if a.frame:
             await ws.send_bytes(('\033[2J\033[H'+a.frame.screen.replace('\n','\r\n')+
                                  f'\033[{a.frame.cursor[1]+1};{a.frame.cursor[0]+1}H').encode('latin1'))
-        await ws.send_json({'controlling':controlling,'status':a.status()})
+        await ws.send_json({'controlling':a.controller is ws,'status':a.status()})
         async def output():
             while True:
                 data = await queue.get()
@@ -428,13 +468,13 @@ class Server:
         try:
             async for message in ws:
                 if message.type not in (WSMsgType.TEXT,WSMsgType.BINARY): continue
-                if not controlling:
+                if a.controller is not ws:
                     await asyncio.to_thread(a.audit,'WS','tty',role,403)
                     continue
                 keys = message.data.decode('latin1') if isinstance(message.data,bytes) else message.data
                 try:
                     async with self.access[a.id].operation():
-                        if a.role(token) != 'owner':
+                        if a.deleted or not authorized():
                             await ws.close(code=1008, message=b'Credential revoked')
                             break
                         if a.state in {'paused','saved'}: await self.resume_attempt(a)
@@ -449,7 +489,7 @@ class Server:
                 if queue.full():
                     await ws.close(code=1013,message=b'Slow terminal client')
                     break
-                queue.put_nowait({'controlling':True,'status':a.status()})
+                queue.put_nowait({'controlling':a.controller is ws,'status':a.status()})
         finally:
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError,ConnectionError,RuntimeError): await task
