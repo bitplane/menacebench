@@ -2,6 +2,22 @@
 
 Notes from playtesting
 
+## v0.0.4
+
+- GPT Luna on low got stuck and marked the /goal as blocked, when it was
+  just stood in a corner with the map explored and the exit visible.
+- One instance couldn't see the path ahead.
+- They don't like picking up items. Didn't look into this too much
+- Luna dreamt up its own limits:
+  > Luna is alive on level 3, but this turn is reaching its execution
+  > limit before the run can be finished. I’m pausing this same attempt
+  > through the player API so it can be resumed later.
+
+Added the guidebook to the webserver so it can read what the different
+symbols actually mean and hopefuly learn to search.
+
+Changed the PLAYER.md prompt to clarify the pause condition. 
+
 ## v0.0.1
 
 - GPT Luna 6.1 escaped the maze after 17 turns.
