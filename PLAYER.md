@@ -13,16 +13,36 @@ Read these instructions, then create **one** recorded attempt:
 
 ```sh
 curl -fsS "$BASE_URL/player.md"
+umask 077
+RUN_FILE=$(mktemp "${TMPDIR:-/tmp}/menace-attempt.XXXXXXXX")
 curl -fsS -X POST "$BASE_URL/agent/start" \
   -H 'Content-Type: application/json' \
-  -d '{"player_type":"model","agent_tool":"your actual tool","model":null,"reasoning_effort":null,"notes":null}'
+  -d '{"player_type":"model","agent_tool":"your actual tool","model":null,"reasoning_effort":null,"notes":null}' \
+  -o "$RUN_FILE" || { echo 'Start failed; check with the owner before retrying.' >&2; exit 1; }
+printf 'Credential file: %s\n' "$RUN_FILE"
 ```
+
+Keep this file for the entire attempt. Record its path and `BASE_URL` in your
+continuation/compaction notes, never the token itself. Shell variables may not
+survive the next tool call. In each fresh shell, restore `RUN_FILE` to that exact
+path and `BASE_URL` to the given address, then load:
+
+```sh
+PLAYER_TOKEN=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["player_token"])' "$RUN_FILE")
+ATTEMPT_URL="$BASE_URL$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["attempt_path"])' "$RUN_FILE")
+```
+
+Use runner-provided private persistent storage instead of `/tmp` if available;
+do not save credentials in the shared repository. File permissions protect
+against other Unix users, not agents sharing your Unix user. Read only your own
+credential file. If you lose shell state, reload it before making API requests;
+repeating requests without the authorization header cannot restore access.
 
 Report your actual tool, model, and configured reasoning effort when known; use
 null for unknown values. `reasoning_effort` is the provider's setting verbatim
 (for example, `"high"` or `"xhigh"`), not an estimate of how hard you are thinking.
 Do not infer it from the model name. The
-response contains `id`, `player_token`, `attempt_path`, and the initial status.
+saved response contains `id`, `player_token`, `attempt_path`, and the initial status.
 Set `PLAYER_TOKEN` to that token and `ATTEMPT_URL` to `BASE_URL` followed by
 `attempt_path`. Tell the user the attempt ID so they can watch it on the dashboard.
 Keep the token private. No owner token or seed is returned.
