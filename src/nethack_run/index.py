@@ -16,8 +16,11 @@ SCHEMA_VERSION = 1
 def fingerprint(path: Path):
     """Detect any durable change to an attempt since its row was written."""
     parts = []
-    for name in ('private.json', 'events.jsonl'):
-        stat = (path/name).stat()
+    for name in ('private.json', 'events.jsonl', 'submission.json'):
+        try: stat = (path/name).stat()
+        except FileNotFoundError:
+            if name == 'submission.json': parts.append('-'); continue
+            raise
         parts.append(f'{stat.st_size}:{stat.st_mtime_ns}')
     return '/'.join(parts)
 

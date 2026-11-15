@@ -74,10 +74,22 @@ def main(argv=None):
     serve.add_argument('--cast-ttl',type=float,default=7*86400,help='Seconds an unwatched cached recording is kept')
     serve.add_argument('--cast-cache-bytes',type=int,default=2*1024**3,help='Total size budget for cached recordings')
     serve.add_argument('--min-free-bytes',type=int,default=2*1024**3,help='Evict cached recordings while free disk space is below this')
+    serve.add_argument('--results-repo',default='bitplane/menacebench-results',help='GitHub repository that receives submitted runs')
+    serve.add_argument('--results-token',type=Path,help='File holding a fine-grained GitHub token for --results-repo; enables submission')
     for name in ('replay','export'):
         p=sub.add_parser(name);p.add_argument('package',type=Path)
         if name=='export':p.add_argument('--output',type=Path,required=True)
         p.add_argument('--diagnostic-cross-build',action='store_true',help='Compare another build without claiming official verification')
+    check=sub.add_parser('check',help='Classify run packages as verified, unverified or failed (results CI)')
+    check.add_argument('packages',type=Path,nargs='*',help='Package folders named by attempt ID')
+    check.add_argument('--results',type=Path,help='Check every attempts/<id>/ package in a results checkout')
+    check.add_argument('--changed-from',help='With --results: check only attempts changed since this git ref, and enforce PR path rules')
+    check.add_argument('--output',type=Path,help='Write the statuses as JSON, keyed by attempt ID')
+    site=sub.add_parser('build-site',help='Build the static results site from a results checkout')
+    site.add_argument('results',type=Path);site.add_argument('--output',type=Path,required=True)
+    site.add_argument('--status',type=Path,required=True,help='JSON written by check --output')
+    site.add_argument('--repo-url',default='https://github.com/bitplane/menacebench-results/tree/master')
+    site.add_argument('--cname')
     for name in ('play','watch'):
         p=sub.add_parser(name);p.add_argument('url');p.add_argument('--unix-socket')
     args=parser.parse_args(argv)
@@ -88,13 +100,40 @@ def main(argv=None):
         if args.cast_ttl<=0 or args.cast_cache_bytes<0 or args.min_free_bytes<0:parser.error('Cache limits must be positive')
         contributors=json.loads(args.contributors.read_text()) if args.contributors else None
         github_auth=json.loads(args.github_auth.read_text()) if args.github_auth else None
-        server=Server(args.state,args.instance,contributors,args.concurrency,limits,github_auth,cast_cache)
+        submitter=None
+        if args.results_token:
+            from .submission import Submitter
+            try:submitter=Submitter(args.results_repo,args.results_token.read_text())
+            except ValueError as error:parser.error(str(error))
+        server=Server(args.state,args.instance,contributors,args.concurrency,limits,github_auth,cast_cache,submitter)
         web.run_app(server.app(),host=args.host if not args.unix_socket else None,
                     port=args.port if not args.unix_socket else None,path=args.unix_socket,access_log=None)
     elif args.command in ('replay','export'):
         from .images import dispatch
         if args.diagnostic_cross_build or not dispatch(args.package, getattr(args,'output',None)):
             print(json.dumps(verify(args.package, getattr(args,'output',None),args.diagnostic_cross_build),indent=2))
+    elif args.command=='check':
+        from .results import changed_attempts, check as check_package, check_changes
+        packages=list(args.packages)
+        if args.results and args.changed_from:
+            import subprocess
+            diff=subprocess.run(['git','-C',str(args.results),'diff','--name-status','--no-renames',args.changed_from+'...HEAD'],
+                                capture_output=True,text=True,check=True).stdout.splitlines()
+            problems=check_changes(diff)
+            if problems:
+                print('\n'.join(problems),file=sys.stderr);raise SystemExit(1)
+            packages+=[args.results/'attempts'/ident for ident in changed_attempts(diff) if (args.results/'attempts'/ident/'attempt.json').exists()]
+        elif args.results:
+            packages+=sorted(p for p in (args.results/'attempts').glob('*') if p.is_dir())
+        statuses={}
+        for package in packages:
+            record=check_package(package);statuses[record['attempt_id']]=record
+            print(f"{record['status']:10} {record['attempt_id']}  {record['reason']}",file=sys.stderr)
+        if args.output:args.output.write_text(json.dumps(statuses,indent=1,sort_keys=True))
+        if any(r['status']=='failed' for r in statuses.values()):raise SystemExit(1)
+    elif args.command=='build-site':
+        from .results import build_site
+        build_site(args.results,args.output,json.loads(args.status.read_text()),args.repo_url,args.cname)
     else:asyncio.run(terminal(args))
 
 if __name__=='__main__':main()
