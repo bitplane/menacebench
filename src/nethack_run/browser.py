@@ -11,6 +11,7 @@ from urllib.parse import urlencode, urlsplit
 
 from aiohttp import ClientSession, ClientTimeout, ClientError, web
 from .attempt import Conflict
+from .recording import recording
 
 ASSETS = Path(__file__).with_name('web')
 COOKIE = 'nethack_owner'
@@ -23,6 +24,9 @@ class Browser:
         self.config = config
         self.pending = {}
         self.sessions = {}
+        self.replays = {}
+        self.replay_slots = asyncio.Semaphore(1)
+        self.replay_running = set()
         if config is not None:
             if set(config) != {'client_id', 'client_secret', 'owner_ids', 'public_url'}:
                 raise ValueError('GitHub configuration needs client_id, client_secret, owner_ids, public_url')
@@ -74,7 +78,7 @@ class Browser:
 
     async def asset(self, request):
         name = request.match_info['name']
-        if name not in {'app.js', 'style.css'}: raise web.HTTPNotFound()
+        if name not in {'app.js', 'style.css', 'asciinema-player.min.js', 'asciinema-player.css'}: raise web.HTTPNotFound()
         return web.FileResponse(ASSETS/name)
 
     async def login(self, request):
@@ -165,6 +169,19 @@ class Browser:
         action = request.match_info['action']
         disposition = 200
         try:
+            if action == 'replay':
+                if a.state != 'finished': raise Conflict('The attempt is still in progress')
+                if (a.path/'replay.cast').exists():
+                    return web.json_response({'status':'ready', 'url':request.path})
+                task = self.replays.get(a.id)
+                if task is not None and task.done():
+                    del self.replays[a.id]
+                    disposition = 422
+                    raise web.HTTPUnprocessableEntity(text='Replay could not be reproduced with this build. Export it in its recorded image.')
+                if task is None:
+                    self.replays[a.id] = asyncio.create_task(self.build_recording(a))
+                disposition = 202
+                return web.json_response({'status':'preparing'}, status=202)
             if action in {'pause', 'resume'}:
                 await asyncio.to_thread(getattr(a, action))
                 return web.json_response(self.summary(a))
@@ -183,7 +200,40 @@ class Browser:
         finally:
             await asyncio.to_thread(a.audit, request.method, request.path, 'github:'+str(owner['id']), disposition)
 
+    async def build_recording(self, attempt):
+        async with self.replay_slots:
+            self.replay_running.add(attempt.id)
+            try:
+                await asyncio.to_thread(recording, attempt)
+            except (OSError, ValueError, RuntimeError, TimeoutError):
+                # Do not publish a partial or divergent recording. The owner
+                # receives a retryable error without private verifier details.
+                return
+            finally:
+                self.replay_running.discard(attempt.id)
+
+    async def replay_file(self, request):
+        self.session(request)
+        a = self.server.attempts.get(request.match_info['id'])
+        if a is None: raise web.HTTPNotFound()
+        if a.state != 'finished': raise web.HTTPConflict(text='The attempt is still in progress')
+        path = a.path/'replay.cast'
+        if not path.exists(): raise web.HTTPNotFound(text='Recording is not prepared yet')
+        response = web.FileResponse(path)
+        response.content_type = 'application/x-asciicast'
+        if 'download' in request.query:
+            response.headers['Content-Disposition'] = f'attachment; filename="{a.id}.cast"'
+        return response
+
+    async def cleanup(self, app):
+        # Drop queued work, but let the one active exporter close its game and
+        # publish atomically before the event loop shuts down.
+        for ident, task in self.replays.items():
+            if ident not in self.replay_running: task.cancel()
+        await asyncio.gather(*self.replays.values(), return_exceptions=True)
+
     def routes(self, app):
+        app.on_cleanup.append(self.cleanup)
         app.router.add_get('/', self.home)
         app.router.add_get('/assets/{name}', self.asset)
         app.router.add_get('/auth/github', self.login)
@@ -192,6 +242,7 @@ class Browser:
         app.router.add_get('/dashboard/me', self.me)
         app.router.add_get('/dashboard/attempts', self.attempts)
         app.router.add_get('/dashboard/attempts/{id}', self.attempt)
+        app.router.add_get('/dashboard/attempts/{id}/replay', self.replay_file)
         app.router.add_post('/dashboard/attempts/{id}/{action}', self.attempt)
 
 
@@ -204,5 +255,5 @@ async def browser_headers(request, handler):
     if request.path == '/' or request.path.startswith(('/auth/', '/dashboard/', '/assets/', '/agent/')):
         response.headers.update({'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer',
                                  'X-Content-Type-Options': 'nosniff',
-                                 'Content-Security-Policy': "default-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"})
+                                 'Content-Security-Policy': "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"})
     return response

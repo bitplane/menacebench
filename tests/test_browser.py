@@ -98,6 +98,49 @@ def test_browser_disabled_without_config(tmp_path):
     asyncio.run(scenario())
 
 
+def test_owner_replay_preparation_download_and_player_isolation(tmp_path, monkeypatch):
+    async def scenario():
+        server = Server(tmp_path/'runs', github_auth=CONFIG)
+        async with wire_client(server, tmp_path) as client:
+            created = await (await client.post('/agent/start', json={})).json()
+            url = '/dashboard/attempts/'+created['id']+'/replay'
+            assert (await client.get(url)).status == 401
+            response, _ = await login(client, server, monkeypatch)
+            assert response.status == 302
+            me = await (await client.get('/dashboard/me')).json()
+            headers = {'Origin': CONFIG['public_url'], 'X-CSRF-Token': me['csrf']}
+            assert (await client.post(url, headers=headers)).status == 409
+            assert (await client.get(url)).status == 409
+            a = server.attempts[created['id']]
+            a.keys('Tester-Bar-Hum-Mal-Cha\ny#quit\ny'+' '*20, 1, 1)
+            assert a.state == 'finished'
+            assert (await client.post(url)).status == 403
+            release = asyncio.Event()
+            builds = []
+            original = server.browser.build_recording
+            async def delayed(attempt):
+                builds.append(attempt.id)
+                await release.wait()
+                await original(attempt)
+            monkeypatch.setattr(server.browser, 'build_recording', delayed)
+            assert (await client.post(url, headers=headers)).status == 202
+            assert (await client.post(url, headers=headers)).status == 202
+            assert builds == [a.id]
+            release.set()
+            await server.browser.replays[a.id]
+            assert (await (await client.post(url, headers=headers)).json())['status'] == 'ready'
+            response = await client.get(url)
+            assert response.status == 200
+            assert json.loads((await response.text()).splitlines()[0])['version'] == 3
+            download = await client.get(url+'?download=1')
+            assert a.id+'.cast' in download.headers['Content-Disposition']
+            player = {'Authorization':'Bearer '+created['player_token']}
+            assert (await client.get(url, headers=player)).status == 403
+            assert not (a.path/'package').exists()
+            a.report_usage({'cost': 0.1})
+    asyncio.run(scenario())
+
+
 def test_login_normalizes_hostname_before_setting_cookie(tmp_path):
     async def scenario():
         server = Server(tmp_path/'runs', github_auth=CONFIG)

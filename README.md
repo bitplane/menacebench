@@ -92,7 +92,10 @@ verification.
 
 The owner dashboard at `http://127.0.0.1:8756` lists ongoing and completed attempts,
 shows the current screen, and supports pause, resume, and finished trace-package
-downloads. Browser owner sessions are separate from bot player tokens. The UI
+downloads. Select a completed attempt to play its asciinema recording, seek,
+change playback speed, or download the `.cast` file. Recordings are prepared on
+first viewing and cached, including for attempts completed before the viewer
+was added. Browser owner sessions are separate from bot player tokens. The UI
 never returns live seeds, token hashes, or private snapshots.
 The public landing page has separate human sign-in and agent-start instructions.
 
@@ -162,9 +165,23 @@ package download, `package/` contains `attempt.json` and `events.jsonl.gz`.
 Later requests are audited separately in `audit.jsonl`. `make down` and container
 replacement preserve this volume. Native runs use `--state` (default `runs/`).
 
-Asciicast files are produced explicitly by `nethack-run export`; the demos write
-them under `build/demo/` and `build/demo-save/`. The dashboard downloads the
-two-file trace package, not the private working directory.
+The dashboard caches asciicast v3 recordings as `/runs/<attempt-id>/replay.cast`,
+with reproduction details in `replay.json`. It reconstructs terminal output from
+the durable recorded inputs, comparing every checkpoint and final result before
+publishing the file. Generation runs off the request loop, one recording at a
+time. Older image recordings are allowed only when they reproduce under the
+running build; their sidecar marks this as a cross-build diagnostic rather than
+verification in the original image. On divergence, use CLI export in the
+original recorded image instead.
+
+Watching does not finalize the trace package or freeze its usage report. The
+asciinema player is bundled locally: no recordings are uploaded to asciinema.org
+and playback does not require a CDN. Thinking gaps are shortened to two seconds
+in the viewer; the downloaded recording retains its recorded timing.
+
+`nethack-run export` also produces standalone recordings; the demos write them
+under `build/demo/` and `build/demo-save/`. Trace-package downloads still contain
+only the two package files, not recordings or the private working directory.
 
 ## Play through the API
 

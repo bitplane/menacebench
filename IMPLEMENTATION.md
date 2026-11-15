@@ -26,7 +26,7 @@ outside this work.
 
 ## Checks completed here
 
-The pinned amd64 image passed the full **100-test** suite in 25.97 seconds with
+The pinned amd64 image passed the full **105-test** suite in 44.65 seconds with
 real TCP/WebSocket transport and worker threads. The native live API corpus
 passed **27 tests** in 22.61 seconds, covering all races/genders/alignments and a
 long run through death, with mid-name and inventory-menu pause/recovery.
@@ -86,6 +86,20 @@ only a player token and attempt path; they do not need human login or owner
 credentials. Tests cover contributor limits, owner-route rejection, invalid
 login state, expiry, wrong accounts, and cross-origin mutations. A live URL-only
 onboarding smoke test also created, played, and finished an attempt successfully.
+
+## Completed-game replay viewer
+
+The dashboard prepares and caches an asciicast v3 recording when a completed
+attempt is selected. Tests cover cache reuse, mutable usage after viewing,
+old-image diagnostic reproduction, refusal of divergent/unfinished recordings,
+single-flight preparation, and owner-only serving/downloads. The player assets
+are vendored from asciinema-player 3.18.0 with its Apache 2.0 license.
+
+An isolated browser check exercised loading, playback, seeking, and pausing
+without adding runs to the live dashboard. A private copy of Luna's completed
+run reproduced all 152 consumed keys and its quit outcome. Its cached recording
+is in `build/recording-check/luna/replay.cast`; this validation did not modify
+the live attempt or finalize its package.
 
 ## ARM comparison
 

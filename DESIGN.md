@@ -141,6 +141,16 @@ Verification compares the screen hash at every checkpoint, how each session's ga
 
 `nethack-run export <package>` replays the attempt, captures the raw terminal output, and writes an asciicast v3 file paced by the recorded key timestamps. Output is timed to the key that produced it, so the pacing is a close reconstruction and not a capture of when each terminal update originally appeared. Pauses and gaps between sessions are collapsed.
 
+The owner dashboard embeds a locally bundled asciinema player for completed
+attempts. On first viewing, it reconstructs and atomically caches `replay.cast`
+beside the attempt, using the same verifier/exporter and an immutable temporary
+package snapshot. This does not finalize the public package or freeze usage.
+Only one recording is generated at a time. Every checkpoint and final result
+must match before publication; older-image reproduction is marked diagnostic in
+the `replay.json` sidecar. Divergent recordings are not served. The owner may
+download the cast, while player tokens cannot access replay endpoints. The
+two-file run-package format remains unchanged.
+
 The test corpus contains startup and every character-selection path, ordinary movement, menus, type-ahead across an unexpected prompt, a retried `keys` request, death, save and resume, pause and resume at several points including mid-prompt and mid-menu, and a long run. Tests play each case through the API and replay it in a separate process. A build change must pass the corpus.
 
 Recovery tests inject failures before and after consumed-key persistence, save creation, session-end persistence, next-session snapshot publication, and package finalization, including a truncated final log record. They verify that a recorded final key completes its save or exit exactly once, that boundary positions survive recovery without duplicated keys, and that no HTTP response or WebSocket output exposes state ahead of the durable log. Storage fault tests distinguish buffered writes from synchronized writes to exercise the machine-failure contract.

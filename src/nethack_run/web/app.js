@@ -1,6 +1,7 @@
 'use strict';
 const $ = id => document.getElementById(id);
 let csrf, selected = null, busy = false, lastList = '';
+let replayId = null, replayPlayer = null, replayEpoch = 0;
 async function api(path, options = {}) {
   const response = await fetch(path, {cache: 'no-store', ...options, headers: {'X-CSRF-Token': csrf || '', ...options.headers}});
   if (response.status === 401) { location.assign('/'); throw new Error('Please sign in again'); }
@@ -10,6 +11,38 @@ async function api(path, options = {}) {
 const name = a => a.character?.name || a.player.model || 'Character creation';
 const label = a => a.state === 'finished' ? a.outcome : a.state;
 const duration = seconds => `${Math.floor(seconds / 60)}m ${Math.floor(seconds % 60)}s`;
+function showReplay(attempt) {
+  const id = attempt?.state === 'finished' ? attempt.id : null;
+  if (id === replayId) return;
+  const epoch = ++replayEpoch;
+  replayId = id;
+  if (replayPlayer) { replayPlayer.dispose(); replayPlayer = null; }
+  $('replay-player').replaceChildren();
+  $('replay-section').hidden = !id;
+  $('cast-download').hidden = $('replay-retry').hidden = true;
+  if (!id) return;
+  $('replay-status').textContent = 'Preparing recording from the recorded moves…';
+  (async () => {
+    try {
+      while (epoch === replayEpoch && selected === id) {
+        const response = await api(`/dashboard/attempts/${id}/replay`, {method: 'POST'});
+        const result = await response.json();
+        if (epoch !== replayEpoch || selected !== id) return;
+        if (result.status === 'ready') {
+          replayPlayer = AsciinemaPlayer.create(result.url, $('replay-player'), {preload: true, idleTimeLimit: 2, fit: 'width'});
+          replayPlayer.addEventListener('error', () => { $('replay-status').textContent = 'The recording could not be loaded.'; $('replay-retry').hidden = false; });
+          $('replay-status').textContent = 'Ready to replay.';
+          $('cast-download').href = result.url + '?download=1';
+          $('cast-download').hidden = false;
+          return;
+        }
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
+    } catch (e) {
+      if (epoch === replayEpoch) { $('replay-status').textContent = e.message; $('replay-retry').hidden = false; }
+    }
+  })();
+}
 async function refresh() {
   if (busy) return;
   try {
@@ -32,12 +65,15 @@ async function refresh() {
       }
     }
     $('detail').hidden = !selected;
+    if (!selected) showReplay(null);
     if (selected) {
       const id = selected, a = await (await api('/dashboard/attempts/' + id)).json();
       if (selected !== id) return;
       $('title').textContent = name(a); $('state').textContent = label(a);
       $('metadata').textContent = `${a.character ? [a.character.role, a.character.race, a.character.gender, a.character.align].join(' / ') : 'Choosing a character'} · Session ${a.session} · ${duration(a.session_seconds)} · Last activity ${new Date(a.last_activity * 1000).toLocaleString()}`;
       $('screen').textContent = a.screen || 'This session has ended. Its consumed keys are preserved in the trace.';
+      $('screen').hidden = a.state === 'finished';
+      showReplay(a);
       $('pause').hidden = !['running', 'advancing'].includes(a.state);
       $('resume').hidden = !['paused', 'saved'].includes(a.state);
       $('download').hidden = $('package-note').hidden = a.state !== 'finished';
@@ -62,5 +98,6 @@ async function action(kind) {
 }
 $('pause').onclick = () => action('pause'); $('resume').onclick = () => action('resume'); $('download').onclick = () => action('package');
 $('filter').onchange = refresh;
+$('replay-retry').onclick = () => { replayId = null; refresh(); };
 $('logout').onclick = async () => { try { await api('/auth/logout', {method: 'POST'}); location.assign('/'); } catch (e) { $('error').textContent = e.message; } };
 (async () => { try { const me = await (await api('/dashboard/me')).json(); csrf = me.csrf; $('account').textContent = me.login; await refresh(); setInterval(refresh, 1000); } catch (e) { $('error').textContent = e.message; } })();

@@ -291,10 +291,10 @@ class Attempt:
                                 'cursor': self.frame.cursor if self.frame else None}
         return (self.frame.screen+'\n' if self.frame else '') + json.dumps(status, separators=(',', ':'))+'\n'
 
-    def package(self):
+    def package(self, destination=None):
         with self.lock:
             if self.state != 'finished': raise Conflict('Attempt is not finished')
-            destination = self.path/'package'
+            destination = Path(destination) if destination is not None else self.path/'package'
             if destination.exists(): return destination
             data = self.journal.path.read_bytes()
             ends = [e for e in self.journal.events if e['type']=='session_end']
@@ -309,8 +309,8 @@ class Attempt:
                         'outcome': self.outcome, 'result': self.result, 'session_durations': durations,
                         'total_duration': sum(durations), 'key_count': self.status()['key_count'],
                         'usage': self.usage, 'event_log_digest': hashlib.sha256(data).hexdigest()}
-            temporary = self.path/('package-'+uuid.uuid4().hex+'.tmp'); temporary.mkdir()
+            temporary = destination.with_name('package-'+uuid.uuid4().hex+'.tmp'); temporary.mkdir()
             atomic_json(temporary/'attempt.json', manifest)
             atomic_bytes(temporary/'events.jsonl.gz', gzip.compress(data, mtime=0))
-            os.rename(temporary, destination); sync_dir(self.path)
+            os.rename(temporary, destination); sync_dir(destination.parent)
             return destination
