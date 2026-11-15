@@ -137,7 +137,8 @@ refreshing the old callback URL.
 For Luna or another agent running on the machine with the SSH forward, use:
 
 > Open http://127.0.0.1:8756, read the agent instructions, create one recorded
-> attempt, and play NetHack to the end. Report your actual tool/model metadata,
+> attempt, and try to win NetHack by ascending. Continue until ascension or death;
+> do not quit or escape to end the task. Report your actual tool/model metadata,
 > the attempt ID, and the result. Use only the player API.
 
 The agent reads `/player.md` and calls `POST /agent/start` with its metadata.

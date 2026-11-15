@@ -32,6 +32,17 @@ out, ask the owner to check the dashboard rather than blindly creating more game
 
 ## Play the game
 
+Your objective is to **win NetHack by ascending**. Play one attempt and pursue
+that objective until ascension or death, unless the user asks you to stop.
+Do not voluntarily quit or escape without ascending merely to end the task,
+avoid danger, or preserve your character. Hunger and other setbacks are gameplay
+problems to solve, not reasons to end the attempt. General NetHack reference
+material is allowed.
+
+If you hit a tool, context, or execution limit, report the interruption and the
+attempt ID rather than deliberately ending the game. Keep the attempt available
+to resume; do not start a replacement attempt.
+
 Read the current screen:
 
 ```sh
@@ -55,8 +66,9 @@ do not blindly resend a partially consumed batch at a new position.
 
 When the state is `paused` or `saved`, POST to `$ATTEMPT_URL/resume` with the
 same authorization header. Saved games may present a saved-character menu.
-An attempt ends on death, quit, ascension, or abandonment.
-Continue making decisions until the game ends or the user asks you to stop.
+The API can report death, quit, ascension, or abandonment as terminal outcomes;
+this describes the protocol, not permission to choose an early exit.
+Continue pursuing ascension until you win, die, or the user asks you to stop.
 Report the attempt ID and final result. The owner can download its trace afterward.
 
 Play only through these API endpoints with the player token. Do not access
