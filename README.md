@@ -329,8 +329,10 @@ The owner dashboard ranks model/reasoning-effort groups by average recorded
 score. The version selector applies to both the leaderboard and attempt list;
 the ongoing/finished selector applies only to the list. All versions combines
 results across releases. Each row shows the scored-attempt count, best score,
-and ascensions. Exact reported model and effort strings define groups, with
-missing values shown as unknown. Human attempts, ongoing games, and completed
+and ascensions. Model names are grouped case-insensitively with spaces and punctuation removed;
+reasoning effort remains the reported setting. The first completed matching
+attempt supplies a readable model name, shared across its effort groups. Raw
+reported names remain unchanged in traces. Missing values are shown as unknown. Human attempts, ongoing games, and completed
 attempts without a recorded score are excluded; scored quits and zero scores
 are included. Tied averages share a rank. Results are rebuilt from the durable
 attempt records, so they survive restarts without sharing NetHack score files.

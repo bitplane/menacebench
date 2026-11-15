@@ -68,3 +68,19 @@ def test_leaderboard_reconstructed_from_durable_attempt(tmp_path):
     expected = leaderboard([a])
     assert expected['scored_attempts'] == 1
     assert leaderboard([Attempt(a.path)]) == expected
+
+
+def test_model_formatting_groups_with_stable_readable_display():
+    variants = [run('GPT-6 Luna', 'high', 10), run('gpt 6 luna', 'high', 30),
+                run('GPT.6_LUNA', 'low', 60), run('GPT-6 Luna', 'high', 1000, version='0.0.1')]
+    for index, a in enumerate(variants):
+        a.id = str(index)
+        a.last_activity = index
+    result = leaderboard(reversed(variants), '0.0.4')
+    assert len(result['groups']) == 2
+    assert {r['model_key'] for r in result['groups']} == {'gpt6luna'}
+    assert {r['model'] for r in result['groups']} == {'GPT-6 Luna'}
+    high = next(r for r in result['groups'] if r['reasoning_effort'] == 'high')
+    assert high['average_score'] == 20 and high['attempt_count'] == 2
+    assert variants[1].info['metadata']['model'] == 'gpt 6 luna'
+    assert leaderboard(variants, '0.0.4') == result
