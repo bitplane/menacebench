@@ -22,7 +22,7 @@ image:
 run:
 	$(NETHACK_CONTAINER_ENGINE) run --rm -p 127.0.0.1:8000:8000 --mount type=volume,src=nethack-runs,dst=/runs -e NETHACK_IMAGE_DIGEST="$$(cat build/image-id)" "$$(cat build/image-id)"
 
-.PHONY: demo cross-platform-test
+.PHONY: demo cross-platform-test cross-platform-user-test
 demo:
 	$(PYTHON) scripts/demo.py
 
@@ -30,6 +30,10 @@ cross-platform-test:
 	test -n "$(PACKAGE)"
 	$(NETHACK_CONTAINER_ENGINE) build --platform linux/arm64 -t localhost/nethack-run:arm64 .
 	$(NETHACK_CONTAINER_ENGINE) run --rm --platform linux/arm64 --network none --mount type=bind,src=$(abspath $(PACKAGE)),dst=/package,readonly localhost/nethack-run:arm64 replay /package --diagnostic-cross-build
+
+cross-platform-user-test:
+	test -n "$(PACKAGE)"
+	python3 scripts/arm_user_test.py "$(PACKAGE)"
 
 .PHONY: venv
 venv:

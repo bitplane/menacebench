@@ -6,8 +6,9 @@ The behavior and implementation scope are specified in [DESIGN.md](DESIGN.md).
 The native and pinned amd64 image builds pass real-game replay/recovery and live
 TCP/WebSocket tests. The live API demo verifies and exports its package in the
 exact recorded image; the real play/watch clients are exercised through a PTY.
-ARM replay comparison remains outstanding because this host has no ARM execution
-support. See [IMPLEMENTATION.md](IMPLEMENTATION.md) for acceptance evidence.
+ARM replay comparisons also pass for one-session and save/restore packages using
+workspace-only user-space emulation. See [IMPLEMENTATION.md](IMPLEMENTATION.md)
+for acceptance evidence.
 Native packages identify themselves as `native-development`, with a null image digest.
 
 ## Native development
@@ -151,13 +152,22 @@ make test
 make demo                         # requires a running server on port 8000
 .venv/bin/python scripts/terminal_smoke.py  # real PTY play/watch clients
 make cross-platform-test PACKAGE=build/demo
+# Without host ARM/binfmt support (Debian/Ubuntu amd64):
+make cross-platform-user-test PACKAGE=build/demo
 ```
 
 The demo creates and plays an attempt through HTTP, pauses/resumes it, quits,
 downloads its package, verifies it in its recorded environment, and writes
 `build/demo/replay.cast`. It does not submit or publish anything.
-The ARM test needs a Podman runtime with ARM execution support. Cross-build
-comparison is diagnostic and remains outside the official verification contract.
+The container ARM test needs a Podman runtime with ARM execution support. The
+user-space alternative downloads PRoot/QEMU packages into `build/arm-tools`,
+exports the pinned ARM base filesystem with Podman, and builds there using the
+same pinned Debian repositories. It does not install host packages or register
+binfmt handlers. It requires network and unprivileged `ptrace` access and is
+slower than native execution. After a successful build, repeat just the replay
+with `python3 scripts/arm_user_test.py build/demo --replay-only`.
+Cross-build comparison is diagnostic and remains outside the official
+verification contract.
 
 The test corpus includes character selection, movement, menus, a long run to
 death, save/restore, interrupted batches, retry rejection, process recovery,
