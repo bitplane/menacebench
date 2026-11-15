@@ -1,0 +1,2 @@
+# Developer release tooling only; excluded from the runtime image.
+bump-my-version==1.8.1

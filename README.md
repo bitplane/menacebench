@@ -302,7 +302,16 @@ Attempts record `harness_version` separately from `schema_version` (the package
 format), the game build identity, and container image digest. The harness version
 is captured at creation and survives restarts and exports. Existing unversioned
 packages remain readable. Release `v0.0.1` identifies commit `69e794c`; new
-attempts use `0.0.2`.
+attempts read `[project].version` from `pyproject.toml` (or installed package
+metadata). There is no separate runtime version constant to maintain.
+
+Use `make bump` for the next patch release, or `make bump PART=minor` / `major`.
+This installs the pinned Bump My Version tool in `build/release-tools`, updates
+`project.version`, commits the change, and creates a matching `vX.Y.Z` tag. It
+requires a clean working tree. `make bump-dry` previews the changes. Nothing is
+pushed automatically. Build and deploy the release with `make image && make up`;
+an already running server keeps its existing image and recorded attempts retain
+the version they started with.
 
 To backfill legacy data, stop the server and run
 `PYTHONPATH=src .venv/bin/python scripts/backfill_version.py STATE 0.0.1 BACKUP`.

@@ -59,3 +59,19 @@ cross-platform-user-test:
 venv:
 	$(VENV_PYTHON) -m venv .venv
 	.venv/bin/pip install --require-hashes -r requirements.lock
+
+# Keep release tooling separate from the hash-pinned runtime environment.
+PART ?= patch
+RELEASE_PYTHON ?= python3.12
+RELEASE_TOOL = build/release-tools/bin/bump-my-version
+
+$(RELEASE_TOOL): requirements-release.txt
+	$(RELEASE_PYTHON) -m venv build/release-tools
+	build/release-tools/bin/python -m pip install -r requirements-release.txt
+
+.PHONY: bump bump-dry
+bump: $(RELEASE_TOOL)
+	$(RELEASE_TOOL) bump $(PART)
+
+bump-dry: $(RELEASE_TOOL)
+	$(RELEASE_TOOL) bump --dry-run --verbose $(PART)
