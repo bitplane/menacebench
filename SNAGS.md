@@ -21,7 +21,9 @@
     test traces to the live dashboard. Event logs remain loaded in server memory,
     so long histories can grow memory even after game processes have stopped.
 
-- **Record model reasoning effort.** Add nullable `reasoning_effort` to player
-  metadata, preserve the provider's string verbatim, and carry it into packages,
-  agent instructions, and the dashboard. Unknown values should remain null;
-  retain compatibility with existing traces that lack the field.
+## Implemented (pending deployment)
+
+- **Record model reasoning effort.** Optional nullable `reasoning_effort` is
+  accepted by both creation endpoints, preserved verbatim in events/packages,
+  and displayed in the dashboard. Instructions say to report the configured
+  value or null, never infer it. Existing traces without the field remain valid.

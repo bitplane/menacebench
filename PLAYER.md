@@ -14,10 +14,13 @@ Read these instructions, then create **one** recorded attempt:
 curl -fsS "$BASE_URL/player.md"
 curl -fsS -X POST "$BASE_URL/agent/start" \
   -H 'Content-Type: application/json' \
-  -d '{"player_type":"model","agent_tool":"your actual tool","model":null,"notes":null}'
+  -d '{"player_type":"model","agent_tool":"your actual tool","model":null,"reasoning_effort":null,"notes":null}'
 ```
 
-Report your actual tool and model when known; use null for unknown values. The
+Report your actual tool, model, and configured reasoning effort when known; use
+null for unknown values. `reasoning_effort` is the provider's setting verbatim
+(for example, `"high"` or `"xhigh"`), not an estimate of how hard you are thinking.
+Do not infer it from the model name. The
 response contains `id`, `player_token`, `attempt_path`, and the initial status.
 Set `PLAYER_TOKEN` to that token and `ATTEMPT_URL` to `BASE_URL` followed by
 `attempt_path`. Tell the user the attempt ID so they can watch it on the dashboard.

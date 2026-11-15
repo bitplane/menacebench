@@ -10,6 +10,11 @@ async function api(path, options = {}) {
 }
 const name = a => a.character?.name || a.player.model || 'Character creation';
 const label = a => a.state === 'finished' ? a.outcome : a.state;
+const playerLabel = a => {
+  const player = a.player.model || a.player.player_type || 'Unknown player';
+  return a.player.player_type === 'model' || a.player.model || a.player.reasoning_effort
+    ? `${player} · Reasoning: ${a.player.reasoning_effort || 'unknown'}` : player;
+};
 const duration = seconds => `${Math.floor(seconds / 60)}m ${Math.floor(seconds % 60)}s`;
 function showReplay(attempt) {
   const id = attempt?.state === 'finished' ? attempt.id : null;
@@ -60,7 +65,7 @@ async function refresh() {
         const b = document.createElement('button'); b.className = 'run' + (a.id === selected ? ' selected' : ''); b.setAttribute('aria-pressed', String(a.id === selected));
         const badge = document.createElement('span'); badge.className = 'badge'; badge.textContent = label(a);
         const title = document.createElement('strong'); title.textContent = name(a);
-        const sub = document.createElement('small'); sub.textContent = `${a.player.model || a.player.player_type || 'Unknown player'} · Session ${a.session} · ${a.key_count} keys`;
+        const sub = document.createElement('small'); sub.textContent = `${playerLabel(a)} · Session ${a.session} · ${a.key_count} keys`;
         b.append(badge, title, sub); b.onclick = () => { selected = a.id; refresh(); }; $('runs').append(b);
       }
     }
@@ -70,7 +75,7 @@ async function refresh() {
       const id = selected, a = await (await api('/dashboard/attempts/' + id)).json();
       if (selected !== id) return;
       $('title').textContent = name(a); $('state').textContent = label(a);
-      $('metadata').textContent = `${a.character ? [a.character.role, a.character.race, a.character.gender, a.character.align].join(' / ') : 'Choosing a character'} · Session ${a.session} · ${duration(a.session_seconds)} · Last activity ${new Date(a.last_activity * 1000).toLocaleString()}`;
+      $('metadata').textContent = `${playerLabel(a)} · ${a.character ? [a.character.role, a.character.race, a.character.gender, a.character.align].join(' / ') : 'Choosing a character'} · Session ${a.session} · ${duration(a.session_seconds)} · Last activity ${new Date(a.last_activity * 1000).toLocaleString()}`;
       $('screen').textContent = a.screen || 'This session has ended. Its consumed keys are preserved in the trace.';
       $('screen').hidden = a.state === 'finished';
       showReplay(a);

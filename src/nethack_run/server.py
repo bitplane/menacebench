@@ -110,7 +110,7 @@ class Server:
             metadata = await request.json()
         except (ValueError, TypeError):
             raise web.HTTPBadRequest(text='Expected a JSON metadata object')
-        if not isinstance(metadata, dict) or set(metadata)-{'player_type','agent_tool','tool_version','model','notes'}:
+        if not isinstance(metadata, dict) or set(metadata)-{'player_type','agent_tool','tool_version','model','reasoning_effort','notes'}:
             raise web.HTTPBadRequest(text='Invalid player metadata')
         if metadata.get('player_type') not in {None,'human','model'}:
             raise web.HTTPBadRequest(text='Invalid player_type')

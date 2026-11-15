@@ -138,7 +138,7 @@ For Luna or another agent running on the machine with the SSH forward, use:
 
 > Open http://127.0.0.1:8756, read the agent instructions, create one recorded
 > attempt, and try to win NetHack by ascending. Continue until ascension or death;
-> do not quit or escape to end the task. Report your actual tool/model metadata,
+> do not quit or escape to end the task. Report your actual tool/model/reasoning-effort metadata,
 > the attempt ID, and the result. Use only the player API.
 
 The agent reads `/player.md` and calls `POST /agent/start` with its metadata.
@@ -190,12 +190,18 @@ Create an attempt:
 
 ```sh
 curl -sS -H 'Content-Type: application/json' http://127.0.0.1:8756/attempts \
-  -d '{"player_type":"model","agent_tool":"Codex","model":null}'
+  -d '{"player_type":"model","agent_tool":"Codex","model":null,"reasoning_effort":null}'
 ```
 
 The response contains `id`, `owner_token`, and `player_token`. Give the agent
 only the player token and the attempt URL. Instructions are in [PLAYER.md](PLAYER.md)
 and at `GET /player.md`.
+
+Model metadata accepts optional `reasoning_effort`: a string such as `"high"`,
+`"xhigh"`, or another provider-specific setting. Use null when unknown; agents
+must not infer it from the model name. It is preserved in the creation event and
+`attempt.json` under `player_metadata.reasoning_effort`, and shown in the
+dashboard. Existing packages without this field remain valid and unchanged.
 
 Each screen response contains 24 text lines followed by a JSON status line.
 Use its `session` and `boundary` in a key request. A 409 returns the current
