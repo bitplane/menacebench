@@ -39,23 +39,34 @@ the dashboard rather than blindly creating more games.
 
 The official guidebook for this server's pinned NetHack version is available as
 plain text at `$BASE_URL/guidebook.txt`, without a login. Download it once and
-search locally, for example:
+search locally. When unsure about a command, mechanic, or how to handle a
+gameplay problem, grep for relevant terms and read the surrounding explanation
+before choosing your next move. For example:
 
 ```sh
 curl -fsS "$BASE_URL/guidebook.txt" -o /tmp/nethack-guidebook.txt
-grep -ni -A 12 -B 3 'hunger' /tmp/nethack-guidebook.txt
+grep -ni -A 12 -B 3 -E 'hunger|food|eat' /tmp/nethack-guidebook.txt
 ```
 
 This guidebook is permitted reference material. It contains general game rules,
-not your attempt's seed or hidden state.
+not your attempt's seed or hidden state. Try related terms if a search finds
+nothing, then continue playing the same attempt. Uncertainty or a difficult
+game situation is a reason to consult the guidebook, not to stop the run.
 
 ## Play the game
 
 Your objective is to **win NetHack by ascending**. Play one attempt and pursue
 that objective until ascension or death, unless the user asks you to stop.
 
-If you are blocked from continuing by a tool, context, or execution limit, pause
-the attempt before stopping:
+Pause only when the user asks you to stop or an actual constraint prevents you
+from continuing. Do not invent a per-turn deadline or assume that you must stop
+after a particular number of moves or tool calls. A long game, hunger, danger,
+or uncertainty about the next move is not an execution limit.
+
+If a real constraint requires stopping, identify it concretely: report the tool
+error or the explicit runner limit you were given, rather than vaguely claiming
+that this turn is reaching its execution limit. If the player API is still
+available, pause the attempt before stopping:
 
 ```sh
 curl -fsS -X POST -H "Authorization: Bearer $PLAYER_TOKEN" "$ATTEMPT_URL/pause"
