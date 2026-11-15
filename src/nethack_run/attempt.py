@@ -28,6 +28,7 @@ class Attempt:
         self.pause_requested = threading.Event()
         self.pause_reason = "owner"
         self.advancing = False
+        self.deleted = False
         self.info = json.loads((path/'private.json').read_bytes())
         self.id = self.info['id']
         self.journal = Journal(path/'events.jsonl')
@@ -88,6 +89,7 @@ class Attempt:
         return attempt, owner, player
 
     def role(self, token):
+        if self.deleted: return None
         digest = hashlib.sha256(token.encode()).hexdigest()
         for role in ('owner', 'player'):
             if secrets.compare_digest(self.info[role+'_hash'], digest): return role
@@ -251,6 +253,7 @@ class Attempt:
             try: game.process.kill()
             except ProcessLookupError: pass
         with self.lock:
+            if self.deleted: raise Conflict('Attempt was deleted')
             if self.state == 'paused': return
             if self.state != 'running': raise Conflict('Session is not running')
             elapsed = self.clock()
@@ -299,7 +302,7 @@ class Attempt:
 
     def expire(self):
         with self.lock:
-            if self.state not in {'paused','saved'}: return
+            if self.deleted or self.state not in {'paused','saved'}: return
             self.journal.append('abandoned', session=self.session)
             self.state = 'finished'; self.outcome = 'abandoned'; self.result = None
 
@@ -318,6 +321,7 @@ class Attempt:
 
     def audit(self, method, path, role, disposition):
         with self.lock:
+            if self.deleted: return
             fields = dict(method=method, path=path, role=role, disposition=disposition)
             if (self.path/'package').exists():
                 Journal(self.path/'audit.jsonl').append('request', **fields)

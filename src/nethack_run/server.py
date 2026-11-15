@@ -9,10 +9,13 @@ import json
 from pathlib import Path
 import tarfile
 import time
+import shutil
+import uuid
 from aiohttp import web, WSMsgType
 from .attempt import Attempt, Conflict
 from .access import AccessGate, github_id, run_blocking
 from .engine import ROOT
+from .storage import atomic_json, sync_dir
 
 
 class Server:
@@ -29,6 +32,10 @@ class Server:
         self.admission_lock = asyncio.Lock()
         self.monitor_task = None
         self.state_lock = None
+        self.deleted_ids = set()
+        self.pending_deletions = set()
+        self.next_cleanup = 0
+        self.cleanup_lock = asyncio.Lock()
         from .browser import Browser
         self.browser = Browser(self, github_auth)
 
@@ -36,7 +43,18 @@ class Server:
         import fcntl
         self.state_lock = (self.root/".server.lock").open("a")
         fcntl.flock(self.state_lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        tombstones = self.root/'.deleted'
+        tombstones.mkdir(mode=0o700, exist_ok=True)
+        sync_dir(self.root)
+        for path in tombstones.glob('*.json'):
+            record = json.loads(path.read_bytes())
+            if str(uuid.UUID(path.stem)) != path.stem or record.get('attempt_id') != path.stem:
+                raise ValueError('Invalid deletion record')
+            self.deleted_ids.add(path.stem)
+        self.pending_deletions = set(self.deleted_ids)
+        await self.cleanup_deleted()
         for path in self.root.iterdir():
+            if path.name in self.deleted_ids: continue
             if path.is_dir() and (path/'private.json').exists():
                 attempt = Attempt(path)
                 await asyncio.to_thread(attempt.recover)
@@ -48,7 +66,7 @@ class Server:
         if self.monitor_task:
             self.monitor_task.cancel()
             with contextlib.suppress(asyncio.CancelledError): await self.monitor_task
-        for attempt in self.attempts.values():
+        for attempt in list(self.attempts.values()):
             if attempt.state == 'running': await asyncio.to_thread(attempt.pause, 'shutdown')
 
         if self.state_lock: self.state_lock.close()
@@ -57,6 +75,8 @@ class Server:
         while True:
             await asyncio.sleep(1)
             await self.enforce_limits()
+            if self.pending_deletions and time.monotonic() >= self.next_cleanup:
+                await self.cleanup_deleted()
 
     async def enforce_limits(self):
         for a in list(self.attempts.values()):
@@ -72,8 +92,52 @@ class Server:
     def index_tokens(self, attempt):
         for digest, (known, _) in list(self.token_index.items()):
             if known is attempt: del self.token_index[digest]
+        if attempt.deleted: return
         for role in ('owner','player'):
             self.token_index[attempt.info[role+'_hash']] = (attempt,role)
+
+    def commit_deletion(self, attempt, actor):
+        with attempt.lock:
+            if attempt.state == 'running': attempt.pause('admin_delete')
+            marker = self.root/'.deleted'/(attempt.id+'.json')
+            try:
+                atomic_json(marker, {'attempt_id': attempt.id, 'actor_github_id': actor,
+                                     'action': 'delete_attempt', 'wall_time': time.time()})
+            finally:
+                # A published tombstone is authoritative even if directory fsync
+                # reports an error. Never resurrect it in the live process.
+                attempt.deleted = marker.exists()
+
+    async def delete_attempt(self, attempt, actor):
+        try:
+            await run_blocking(self.commit_deletion, attempt, actor)
+        finally:
+            if attempt.deleted:
+                self.deleted_ids.add(attempt.id)
+                self.pending_deletions.add(attempt.id)
+                self.attempts.pop(attempt.id, None)
+                self.index_tokens(attempt)
+                for ws in list(self.terminals[attempt.id]):
+                    await ws.close(code=1008, message=b'Attempt deleted')
+        await self.cleanup_deleted()
+        return attempt.id not in self.pending_deletions
+
+    def purge_deleted(self, identifier):
+        path = self.root/identifier
+        try:
+            if path.is_symlink(): path.unlink()
+            elif path.exists(): shutil.rmtree(path)
+            sync_dir(self.root)
+            return True
+        except OSError:
+            return False
+
+    async def cleanup_deleted(self):
+        async with self.cleanup_lock:
+            for identifier in list(self.pending_deletions):
+                if await run_blocking(self.purge_deleted, identifier):
+                    self.pending_deletions.discard(identifier)
+            self.next_cleanup = time.monotonic()+30
 
     @web.middleware
     async def audit_requests(self, request, handler):
@@ -100,7 +164,8 @@ class Server:
         finally:
             if known:
                 attempt, role = known
-                await asyncio.to_thread(attempt.audit,request.method,request.path,role,status)
+                if not attempt.deleted:
+                    await asyncio.to_thread(attempt.audit,request.method,request.path,role,status)
 
     async def agent_start(self, request):
         return await self.create(request, player_only=True)
@@ -169,6 +234,7 @@ class Server:
         disposition = 500
         try:
             async with self.access[a.id].operation():
+                if a.deleted: raise web.HTTPNotFound()
                 role = a.role(token)
                 if role is None: raise web.HTTPUnauthorized()
                 if (request.method,action) not in allowed[role]:

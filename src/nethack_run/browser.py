@@ -175,7 +175,8 @@ class Browser:
                              'is_mine': a.info.get('owner_github_id') == session['id'],
                              'permissions': {'manage': self.can_manage(session, a),
                                              'recover': self.can_manage(session, a) and a.state != 'finished',
-                                             'assign_owner': self.role(session) == 'admin'}}
+                                             'assign_owner': self.role(session) == 'admin',
+                                             'delete': self.role(session) == 'admin'}}
 
     async def leaderboard(self, request):
         self.session(request)
@@ -199,6 +200,7 @@ class Browser:
         disposition = 200
         try:
             if action == 'replay':
+                if self.server.access[a.id].changing: raise Conflict('Run access is being changed')
                 if a.state != 'finished': raise Conflict('The attempt is still in progress')
                 if (a.path/'replay.cast').exists():
                     return web.json_response({'status':'ready', 'url':request.path})
@@ -211,7 +213,7 @@ class Browser:
                     self.replays[a.id] = asyncio.create_task(self.build_recording(a))
                 disposition = 202
                 return web.json_response({'status':'preparing'}, status=202)
-            if action in {'recover-player', 'owner'}:
+            if action in {'recover-player', 'owner', 'delete'}:
                 body = None
                 if action == 'owner':
                     self.require_admin(owner)
@@ -222,10 +224,18 @@ class Browser:
                         github_id(body['owner_github_id'])
                     except (ValueError, TypeError) as error:
                         raise web.HTTPBadRequest(text=str(error)) from None
+                if action == 'delete': self.require_admin(owner)
                 async with self.server.access[a.id].change():
-                    if action == 'owner': self.require_admin(owner)
+                    if a.deleted: raise web.HTTPNotFound()
+                    if action in {'owner', 'delete'}: self.require_admin(owner)
                     else: self.require_owner(owner, a)
                     try:
+                        if action == 'delete':
+                            task = self.replays.get(a.id)
+                            if task is not None: await asyncio.shield(task)
+                            removed = await self.server.delete_attempt(a, owner['id'])
+                            self.replays.pop(a.id, None)
+                            return web.json_response({'id': a.id, 'deleted': True, 'files_removed': removed})
                         if action == 'recover-player':
                             token = await run_blocking(a.rotate_player_token, owner['id'])
                             return web.json_response({'id': a.id, 'player_token': token,
@@ -241,6 +251,7 @@ class Browser:
                         await ws.close(code=1008, message=b'Ownership changed; credential revoked')
                 return web.json_response(self.summary(a, owner))
             async with self.server.access[a.id].operation():
+                if a.deleted: raise web.HTTPNotFound()
                 self.require_owner(owner, a)
                 if action in {'pause', 'resume'}:
                     if action == 'resume': await self.server.resume_attempt(a)
@@ -261,7 +272,8 @@ class Browser:
             disposition = error.status
             raise
         finally:
-            await asyncio.to_thread(a.audit, request.method, request.path, 'github:'+str(owner['id']), disposition)
+            if not a.deleted:
+                await asyncio.to_thread(a.audit, request.method, request.path, 'github:'+str(owner['id']), disposition)
 
     async def build_recording(self, attempt):
         async with self.replay_slots:

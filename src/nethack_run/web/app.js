@@ -137,6 +137,7 @@ async function refresh() {
       permissions = a.permissions;
       if (!permissions.recover) clearCredentials();
       $('recover-player').hidden = !permissions.recover;
+      $('delete-run').hidden = !permissions.delete;
       $('owner-assignment').hidden = !permissions.assign_owner;
       $('pause').hidden = !permissions.manage || !['running', 'advancing'].includes(a.state);
       $('resume').hidden = !permissions.manage || !['paused', 'saved'].includes(a.state);
@@ -176,6 +177,19 @@ async function recoverPlayer() {
   } catch (e) { $('error').textContent = e.message; }
   finally { busy = false; }
 }
+$('delete-run').onclick = async () => {
+  if (busy || !selected || !permissions.delete) return;
+  const id = selected;
+  if (!confirm(`Permanently delete run ${id}? Its game, trace, and replay will be removed and it will leave the leaderboard.`)) return;
+  busy = true; clearCredentials();
+  try {
+    await api(`/dashboard/attempts/${id}/delete`, {method:'POST'});
+    selected = null; lastList = ''; showReplay(null); $('detail').hidden = true;
+    $('error').textContent = '';
+  } catch (e) { $('error').textContent = e.message; }
+  finally { busy = false; }
+  refresh();
+};
 $('recover-player').onclick = recoverPlayer;
 $('hide-credential').onclick = clearCredentials;
 $('save-credential').onclick = () => {

@@ -46,7 +46,7 @@ Attempts left unresumed past an expiry period end with outcome `abandoned`.
 - **Remote**: the user runs the container on another machine and gives the agent its URL.
 - **Hosted**: the maintainer runs a public instance; contributors create attempts on it and run their own agents against it.
 
-The API is the only interface to the game in every case. The server names its instance in each run package. A hosted instance requires a contributor key to create attempts, limits running games per key (100 by default), and keeps every attempt created on it, including abandoned ones.
+The API is the only interface to the game in every case. The server names its instance in each run package. A hosted instance requires a contributor key to create attempts, limits running games per key (100 by default), and keeps attempts, including abandoned ones, unless a server admin explicitly deletes them.
 
 ## API
 
@@ -209,3 +209,11 @@ Initial nomination is recorded in new creation events and manifests as optional
 reassignments do not rewrite gameplay events or frozen packages. This leaves
 room for authenticated human players and an independently attributed, idempotent
 usage ledger without treating nominated ownership as contribution evidence.
+
+
+Server admins may delete failed runs through the CSRF-protected dashboard.
+Deletion waits for API operations and replay workers, stops the process, and
+removes the attempt from authorization, browsing, and score aggregation. A
+private durable deletion record outside the attempt directory is authoritative
+across crashes; outstanding file removal is retried. Run owners cannot delete
+runs. Deletion does not affect other attempts or shared game score files.

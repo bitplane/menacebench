@@ -383,3 +383,19 @@ these per-run permissions; older versions do not implement them.
 
 Human browser play and contribution accounting remain separate follow-ups.
 Ownership is neither player identity nor proof of token usage or payment.
+
+## Deleting failed runs
+
+Server admins have a **Delete run** button with an explicit confirmation.
+`POST /dashboard/attempts/ID/delete` requires an admin browser session and CSRF
+protection; run owners, viewers, and bearer tokens cannot delete runs. Deletion
+waits for accepted API actions and replay generation, stops a running game,
+revokes its credentials, and removes its directory, packages and cached replay.
+Other attempts are unaffected. Deleted attempts disappear from leaderboards.
+
+A durable `.deleted/ID.json` record retains only the deleted attempt ID, admin
+GitHub ID, action and time. This record is written before removal, preventing a
+crash or filesystem cleanup failure from resurrecting the attempt. Failed file
+cleanup is retried after restart and periodically while running. The API's
+`files_removed` field distinguishes completed file removal from pending cleanup.
+External backups are managed separately.
