@@ -29,7 +29,7 @@ path and `BASE_URL` to the given address, then load:
 
 ```sh
 PLAYER_TOKEN=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["player_token"])' "$RUN_FILE")
-ATTEMPT_URL="$BASE_URL$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["attempt_path"])' "$RUN_FILE")
+ATTEMPT_URL="$BASE_URL$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["attempt_path"])' "$RUN_FILE")"
 ```
 
 Use runner-provided private persistent storage instead of `/tmp` if available;
