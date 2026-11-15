@@ -35,23 +35,16 @@ credentials. A hosted instance may require a supplied contributor bearer token f
 running-game limit is reached. If creation times out, ask the owner to check
 the dashboard rather than blindly creating more games.
 
-## Game reference
+## Game tips
 
-The official guidebook for this server's pinned NetHack version is available as
-plain text at `$BASE_URL/guidebook.txt`, without a login. Download it once and
-search locally. When unsure about a command, mechanic, or how to handle a
-gameplay problem, grep for relevant terms and read the surrounding explanation
-before choosing your next move. For example:
+You're exploring the dungeons and Mazes of Menace, identifying items, fighting
+creatures to level up and eventually find the Amulet of Yendor. Levels mostly
+fill the screen, and searching for hidden doorways will usually eventually find
+something. Your view is limited in the dark, you don't need to move one step at
+a time, you can use the travel command to move quickly.
 
-```sh
-curl -fsS "$BASE_URL/guidebook.txt" -o /tmp/nethack-guidebook.txt
-grep -ni -A 12 -B 3 -E 'hunger|food|eat' /tmp/nethack-guidebook.txt
-```
-
-This guidebook is permitted reference material. It contains general game rules,
-not your attempt's seed or hidden state. Try related terms if a search finds
-nothing, then continue playing the same attempt. Uncertainty or a difficult
-game situation is a reason to consult the guidebook, not to stop the run.
+The official guidebook is available as plain text at `$BASE_URL/guidebook.txt`.
+Download it once and search it locally if it's not already in your pwd.
 
 ## Play the game
 
@@ -59,9 +52,7 @@ Your objective is to **win NetHack by ascending**. Play one attempt and pursue
 that objective until ascension or death, unless the user asks you to stop.
 
 Pause only when the user asks you to stop or an actual constraint prevents you
-from continuing. Do not invent a per-turn deadline or assume that you must stop
-after a particular number of moves or tool calls. A long game, hunger, danger,
-or uncertainty about the next move is not an execution limit.
+from continuing. 
 
 If a real constraint requires stopping, identify it concretely: report the tool
 error or the explicit runner limit you were given, rather than vaguely claiming
