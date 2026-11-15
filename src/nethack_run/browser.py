@@ -72,6 +72,16 @@ class Browser:
         owner = attempt['owner_github_id'] if isinstance(attempt, dict) else attempt.info.get('owner_github_id')
         return self.role(session) == 'admin' or owner == session['id']
 
+    def is_player(self, session, attempt):
+        """Only the person a dashboard game was started for may type into it."""
+        row = attempt if isinstance(attempt, dict) else attempt.summary()
+        return (row.get('human_github_id') is not None and row['human_github_id'] == session['id']
+                and row['owner_github_id'] == session['id'])
+
+    def can_play(self, session, attempt):
+        row = attempt if isinstance(attempt, dict) else attempt.summary()
+        return self.is_player(session, row) and row['state'] != 'finished'
+
     def require_owner(self, session, attempt):
         if not self.can_manage(session, attempt):
             raise web.HTTPForbidden(text='This action requires the run owner or a server admin')
@@ -96,7 +106,8 @@ class Browser:
 
     async def asset(self, request):
         name = request.match_info['name']
-        if name not in {'app.js', 'style.css', 'asciinema-player.min.js', 'asciinema-player.css'}: raise web.HTTPNotFound()
+        if name not in {'app.js', 'style.css', 'asciinema-player.min.js', 'asciinema-player.css',
+                        'xterm.min.js', 'xterm.css'}: raise web.HTTPNotFound()
         return web.FileResponse(ASSETS/name)
 
     async def login(self, request):
@@ -175,13 +186,46 @@ class Browser:
         row = a if isinstance(a, dict) else a.summary()
         return row | {'is_mine': row['owner_github_id'] == session['id'],
                              'permissions': {'manage': self.can_manage(session, row),
-                                             'recover': self.can_manage(session, row) and row['state'] != 'finished',
+                                             # A bot token would let a person's game be played by a bot.
+                                             'recover': (self.can_manage(session, row) and row['state'] != 'finished'
+                                                         and row.get('human_github_id') is None),
+                                             'play': self.can_play(session, row),
                                              'assign_owner': self.role(session) == 'admin',
                                              'delete': self.role(session) == 'admin'}}
 
     async def leaderboard(self, request):
         self.session(request)
-        return web.json_response(leaderboard(self.server.summaries(), request.query.get('version')))
+        humans = request.query.get('humans', '1')
+        if humans not in {'0', '1'}: raise web.HTTPBadRequest(text='humans must be 0 or 1')
+        return web.json_response(leaderboard(self.server.summaries(), request.query.get('version'), humans == '1'))
+
+    async def play(self, request):
+        """Start the signed-in person's only unfinished game, or resume it."""
+        session = self.session(request)
+        try:
+            a, created = await self.server.play(session['id'], session['login'])
+        except Conflict as error:
+            raise web.HTTPConflict(text=str(error)) from None
+        await asyncio.to_thread(a.audit, request.method, request.path, 'github:'+str(session['id']), 201 if created else 200)
+        return web.json_response(self.summary(a, session), status=201 if created else 200)
+
+    async def terminal(self, request):
+        session = self.session(request)
+        # Browsers send cookies on cross-site WebSocket handshakes and CSRF headers
+        # cannot be added, so the Origin check is what stops another site playing.
+        if request.headers.get('Origin') != self.origin: raise web.HTTPForbidden(text='Invalid browser request')
+        a = await self.server.get(request.match_info['id'])
+        if a is None: raise web.HTTPNotFound()
+        key = request.cookies.get(COOKIE)
+        if request.query.get('mode') == 'play' and not self.can_play(session, a):
+            raise web.HTTPForbidden(text='Only the player can type into this game')
+        def authorized():
+            current = self.sessions.get(key)
+            # Keys after the game ends are ignored by the attempt, not treated as revocation.
+            return current is session and current['expires'] > time.time() and self.is_player(session, a)
+        async with self.server.access[a.id].operation():
+            if a.deleted: raise web.HTTPNotFound()
+        return await self.server.terminal(request, a, 'github:'+str(session['id']), authorized, takeover=True)
 
     async def attempts(self, request):
         session = self.session(request)
@@ -229,6 +273,8 @@ class Browser:
                     if a.deleted: raise web.HTTPNotFound()
                     if action in {'owner', 'delete'}: self.require_admin(owner)
                     else: self.require_owner(owner, a)
+                    if action == 'recover-player' and a.info.get('human_github_id') is not None:
+                        raise web.HTTPForbidden(text='Games played in the browser have no player token')
                     try:
                         if action == 'delete':
                             task = self.replays.get(a.id)
@@ -345,6 +391,8 @@ class Browser:
         app.router.add_get('/dashboard/leaderboard', self.leaderboard)
         app.router.add_get('/dashboard/attempts/{id}', self.attempt)
         app.router.add_get('/dashboard/attempts/{id}/replay', self.replay_file)
+        app.router.add_get('/dashboard/attempts/{id}/tty', self.terminal)
+        app.router.add_post('/dashboard/play', self.play)
         app.router.add_post('/dashboard/attempts/{id}/{action}', self.attempt)
 
 
