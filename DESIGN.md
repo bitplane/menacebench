@@ -89,10 +89,10 @@ bootstrap endpoint. An existing player token cannot create additional attempts.
 
 The browser dashboard authenticates any GitHub account using OAuth state and
 PKCE. All signed-in users can view attempts, scores, screens, and completed
-replays. Only configured numeric account IDs have the owner role. Browser sessions are separate from attempt tokens,
-expire after seven days, and end on logout or server restart. The owner can list
-all attempts, see current screens and results, pause/resume, and download finished
-packages; viewer sessions cannot use these controls or export packages. Human
+replays. Configured numeric account IDs are server admins. Each run can also have a
+nominated GitHub owner; its account must authenticate before managing that run. Browser sessions are separate from attempt tokens,
+expire after seven days, and end on logout or server restart. Run owners can pause/resume and export their own attempts; admins can manage
+all attempts. Other viewers cannot use those controls or export packages. Human
 play is a future permission separate from viewing and owner administration.
 Mutations require a same-origin CSRF token. Live seeds, private logs,
 token hashes, and snapshots are not exposed. OAuth credentials remain outside the
@@ -189,3 +189,23 @@ An attempt can be marked `disqualified` with a reason, by the submitter or the m
 - [NetHack Learning Environment](https://github.com/facebookresearch/nle): seeded NetHack sessions and trajectory recording on NetHack 3.6.6.
 - [Asciicast v3 specification](https://docs.asciinema.org/manual/asciicast/v3/): timestamped terminal event format for the web player.
 - [GitHub Actions security guidance](https://docs.github.com/en/actions/concepts/security/compromised-runners): read-only validation of untrusted PR data.
+
+## Run access control
+
+Creation may nominate `owner_github_id` independently of player metadata and
+contributor credentials. It grants rights to the nominated account, never to the
+caller. Authenticated GitHub identity controls access. The existing `owner_ids`
+configuration identifies server admins; ordinary accounts own only nominated
+runs. Per-run capabilities and a My runs filter expose this distinction.
+
+Owner/admin player-token recovery is serialized against accepted operations,
+commits a new hash and administrative audit atomically in `private.json`, and
+invalidates the old token across restart. No automatic resume or gameplay reset
+occurs. Admin-only reassignment revokes both bearer credentials and terminal
+access. Unowned legacy runs are never assigned heuristically.
+
+Initial nomination is recorded in new creation events and manifests as optional
+`initial_owner_github_id`. Current ownership and credential audit stay private;
+reassignments do not rewrite gameplay events or frozen packages. This leaves
+room for authenticated human players and an independently attributed, idempotent
+usage ledger without treating nominated ownership as contribution evidence.

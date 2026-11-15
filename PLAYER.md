@@ -17,7 +17,7 @@ umask 077
 RUN_FILE=$(mktemp "${TMPDIR:-/tmp}/menace-attempt.XXXXXXXX")
 curl -fsS -X POST "$BASE_URL/agent/start" \
   -H 'Content-Type: application/json' \
-  -d '{"player_type":"model","agent_tool":"your actual tool","model":null,"reasoning_effort":null,"notes":null}' \
+  -d '{"player_type":"model","agent_tool":"your actual tool","model":null,"reasoning_effort":null,"owner_github_id":null,"notes":null}' \
   -o "$RUN_FILE" || { echo 'Start failed; check with the owner before retrying.' >&2; exit 1; }
 printf 'Credential file: %s\n' "$RUN_FILE"
 ```
@@ -37,6 +37,16 @@ do not save credentials in the shared repository. File permissions protect
 against other Unix users, not agents sharing your Unix user. Read only your own
 credential file. If you lose shell state, reload it before making API requests;
 repeating requests without the authorization header cannot restore access.
+
+If the user supplies their numeric GitHub ID, set `owner_github_id` to that
+integer; otherwise leave it null. Their ID appears beside their name when they
+sign in to this site's dashboard. This nominates that account to manage this
+run and recover access; it does not grant you any GitHub or owner permissions.
+If your credential file is lost, ask that human to use **My runs → Recover
+player access** and provide the downloaded JSON. For an unowned run, a server
+admin must recover access or assign an owner. Reload the replacement credential
+and resume the same attempt; the previous token will no longer work. Do not
+create another attempt or repeatedly poll without credentials.
 
 Report your actual tool, model, and configured reasoning effort when known; use
 null for unknown values. `reasoning_effort` is the provider's setting verbatim

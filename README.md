@@ -92,7 +92,8 @@ verification.
 
 The dashboard at `http://127.0.0.1:8756` lets anyone with a GitHub account view
 ongoing and completed attempts, current screens, model scores, and replays.
-Only configured owners can pause/resume games or download trace packages. Select a completed attempt to play its asciinema recording, seek,
+Run owners can pause/resume their own games and download their trace packages;
+configured server admins can manage every run. Select a completed attempt to play its asciinema recording, seek,
 change playback speed, or download the `.cast` file. Recordings are prepared on
 first viewing and cached, including for attempts completed before the viewer
 was added. Browser sessions are separate from bot player tokens. The UI
@@ -118,10 +119,10 @@ Without configuration, the game API remains available but browser login is disab
 
 Login uses GitHub's authorization-code flow with state and PKCE, requesting no
 repository or email scopes. Any valid GitHub account receives viewer access;
-only the configured numeric account IDs in `owner_ids` receive owner access.
-`GET /dashboard/me` reports `role` as `viewer` or `owner`. Viewer replay preparation
-still requires CSRF protection. Viewer login does not grant a player token or
-permission to control games; browser-based human play is a future feature. Browser cookies are HttpOnly and SameSite=Lax (also Secure on
+the configured numeric account IDs in `owner_ids` receive server admin access.
+`GET /dashboard/me` reports `role` as `viewer` or `admin`. Viewer replay preparation
+still requires CSRF protection. Login alone does not grant a player token or
+permission to control other people's games; browser-based human play is a future feature. Browser cookies are HttpOnly and SameSite=Lax (also Secure on
 HTTPS); mutations require a same-origin CSRF token. Sessions expire after seven
 days and are cleared by server restart or sign-out. GitHub access tokens are
 used only to obtain identity and are not retained. OAuth codes and secrets are
@@ -340,3 +341,43 @@ can download and grep it as described in `PLAYER.md`. `make setup` prepares the
 file; existing source builds can run `python3 scripts/prepare_guidebook.py`.
 The container includes this file and the NetHack license; Markdown conversion
 is unnecessary.
+
+## Run ownership and recovery
+
+Both creation endpoints accept optional `owner_github_id`: a positive numeric
+GitHub ID or null, separate from player metadata and contributor/quota identity.
+Anyone creating an attempt can nominate an owner; doing so grants that account
+rights over this run, not rights to the caller. Only GitHub authentication proves
+the account's identity. This nomination does not award contribution credit.
+
+The dashboard shows your GitHub ID, a **My runs** filter, the assigned owner,
+and controls according to each run's `permissions`. Any signed-in user can still
+view runs and recordings. The nominated owner and server admins can pause,
+resume, export finished packages, and recover player access for unfinished runs.
+
+`POST /dashboard/attempts/ID/recover-player` requires their browser session,
+same-origin request, and CSRF token. It returns a fresh player credential once;
+save the downloadable JSON privately. It replaces the old player token without
+resuming, resetting, or replacing the game. Only hashes are stored. A lost
+recovery response can be handled by recovering again. Tokens remain valid across
+restarts unless explicitly replaced.
+
+Only server admins can `POST /dashboard/attempts/ID/owner` with
+`{"owner_github_id":123}` (or null to remove ownership). This supports old unowned
+runs and corrections. Changing the owner revokes both existing player and legacy
+owner bearer tokens and disconnects legacy terminal clients. The new owner then
+recovers a player token. Assigning the same owner is a no-op. Ownership changes
+are recorded with the actor, previous owner, new owner, and time; recovery records
+the actor, credential generation, and time. These records and current hashes are
+committed together in the private attempt file. No raw credential is logged.
+
+Already accepted API actions finish before credentials change; later requests
+must authenticate against the new hashes. Administrative changes are separate
+from the gameplay journal and never rewrite finalized packages. New journals
+and packages record `initial_owner_github_id`; current ownership belongs to the
+live server's control data. Old traces without this field remain valid and old
+attempts remain unowned until assigned. Keep the upgraded server when using
+these per-run permissions; older versions do not implement them.
+
+Human browser play and contribution accounting remain separate follow-ups.
+Ownership is neither player identity nor proof of token usage or payment.

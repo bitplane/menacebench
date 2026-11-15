@@ -1,6 +1,6 @@
 'use strict';
 const $ = id => document.getElementById(id);
-let csrf, isOwner = false, selected = null, busy = false, lastList = '';
+let csrf, isAdmin = false, permissions = {}, credentials = null, selected = null, busy = false, lastList = '';
 let refreshEpoch = 0, lastLeaderboard = '';
 const scoreFormat = new Intl.NumberFormat(undefined, {maximumFractionDigits: 2});
 let replayId = null, replayPlayer = null, replayEpoch = 0;
@@ -51,6 +51,7 @@ function showLeaderboard(data) {
 function showDetails(a) {
   $('attempt-details').replaceChildren();
   for (const [label, value] of [
+    ['Run owner GitHub ID', a.owner_github_id ?? 'Unassigned'],
     ['Harness version', versionLabel(a)], ['Model', a.player.model || 'Unknown'],
     ['Agent tool', a.player.agent_tool || 'Unknown'], ['Tool version', a.player.tool_version || 'Unknown'],
     ['Reasoning effort', a.player.reasoning_effort || 'Unknown'], ['Attempt ID', a.id],
@@ -105,11 +106,12 @@ async function refresh() {
     const board = await (await api('/dashboard/leaderboard' + (version === 'all' ? '' : '?version=' + encodeURIComponent(version)))).json();
     if (epoch !== refreshEpoch) return;
     showLeaderboard(board);
-    const runs = all.filter(a => (version === 'all' || versionKey(a) === version) &&
+    const runs = all.filter(a => ($('owner-filter').value !== 'mine' || a.is_mine) && (version === 'all' || versionKey(a) === version) &&
       (filter === 'all' || (filter === 'active' ? a.state !== 'finished' : a.state === 'finished')));
     $('count').textContent = `${runs.length} ${runs.length === 1 ? 'attempt' : 'attempts'}`;
     if (!runs.some(a => a.id === selected)) selected = runs[0]?.id || null;
-    const signature = JSON.stringify(runs.map(a => [a.id, name(a), label(a), a.session, a.key_count, a.player, a.harness_version])) + selected;
+    if (credentials && credentials.id !== selected) clearCredentials();
+    const signature = JSON.stringify(runs.map(a => [a.id, name(a), label(a), a.session, a.key_count, a.player, a.harness_version, a.owner_github_id, a.permissions])) + selected;
     if (signature !== lastList) {
       lastList = signature;
       $('runs').replaceChildren();
@@ -119,7 +121,7 @@ async function refresh() {
         const badge = document.createElement('span'); badge.className = 'badge'; badge.textContent = label(a);
         const title = document.createElement('strong'); title.textContent = name(a);
         const sub = document.createElement('small'); sub.textContent = `${versionLabel(a)} · ${playerLabel(a)} · Session ${a.session} · ${a.key_count} keys`;
-        b.append(badge, title, sub); b.onclick = () => { selected = a.id; refresh(); }; $('runs').append(b);
+        b.append(badge, title, sub); b.onclick = () => { if (busy) return; clearCredentials(); selected = a.id; refresh(); }; $('runs').append(b);
       }
     }
     $('detail').hidden = !selected;
@@ -132,9 +134,13 @@ async function refresh() {
       $('screen').textContent = a.screen || 'This session has ended. Its consumed keys are preserved in the trace.';
       $('screen').hidden = a.state === 'finished';
       showReplay(a);
-      $('pause').hidden = !isOwner || !['running', 'advancing'].includes(a.state);
-      $('resume').hidden = !isOwner || !['paused', 'saved'].includes(a.state);
-      $('download').hidden = $('package-note').hidden = !isOwner || a.state !== 'finished';
+      permissions = a.permissions;
+      if (!permissions.recover) clearCredentials();
+      $('recover-player').hidden = !permissions.recover;
+      $('owner-assignment').hidden = !permissions.assign_owner;
+      $('pause').hidden = !permissions.manage || !['running', 'advancing'].includes(a.state);
+      $('resume').hidden = !permissions.manage || !['paused', 'saved'].includes(a.state);
+      $('download').hidden = $('package-note').hidden = !permissions.manage || a.state !== 'finished';
       $('result').textContent = a.result ? `Score ${a.result.score} · ${a.result.turns} turns · Depth ${a.result.maximum_depth}\n${a.result.cause_of_death}` : '';
       showDetails(a);
     }
@@ -142,21 +148,61 @@ async function refresh() {
   } catch (e) { if (epoch === refreshEpoch) $('error').textContent = e.message; }
 }
 async function action(kind) {
-  if (!isOwner || !selected || busy) return;
+  if (!permissions.manage || !selected || busy) return;
   busy = true;
+  const id = selected;
   try {
-    const response = await api(`/dashboard/attempts/${selected}/${kind}`, {method: 'POST'});
+    const response = await api(`/dashboard/attempts/${id}/${kind}`, {method: 'POST'});
     if (kind === 'package') {
       const url = URL.createObjectURL(await response.blob()), link = document.createElement('a');
-      link.href = url; link.download = `${selected}.tar`; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+      link.href = url; link.download = `${id}.tar`; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
     }
     $('error').textContent = '';
   } catch (e) { $('error').textContent = e.message; }
   finally { busy = false; }
 }
+function clearCredentials() {
+  credentials = null; $('credential-json').value = ''; $('recovered-access').hidden = true;
+}
+async function recoverPlayer() {
+  if (busy || !selected || !permissions.recover) return;
+  if (!confirm('Replace the player token for this run? The previous token will stop working.')) return;
+  const id = selected; busy = true; clearCredentials();
+  try {
+    credentials = await (await api(`/dashboard/attempts/${id}/recover-player`, {method:'POST'})).json();
+    credentials.base_url = location.origin;
+    $('credential-json').value = JSON.stringify(credentials, null, 2);
+    $('recovered-access').hidden = false; $('error').textContent = '';
+  } catch (e) { $('error').textContent = e.message; }
+  finally { busy = false; }
+}
+$('recover-player').onclick = recoverPlayer;
+$('hide-credential').onclick = clearCredentials;
+$('save-credential').onclick = () => {
+  if (!credentials) return;
+  const url = URL.createObjectURL(new Blob([JSON.stringify(credentials, null, 2)], {type:'application/json'}));
+  const link = document.createElement('a'); link.href = url; link.download = `${credentials.id}-player.json`;
+  link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+};
+$('owner-assignment').onsubmit = async event => {
+  event.preventDefault();
+  if (busy || !selected || !permissions.assign_owner) return;
+  const input = $('owner-github-id').value.trim(), id = selected;
+  const owner = input ? Number(input) : null;
+  if (input && (!/^\d+$/.test(input) || !Number.isSafeInteger(owner) || owner <= 0)) { $('error').textContent = 'Enter a positive numeric GitHub ID.'; return; }
+  if (!confirm('Change the run owner and revoke its existing player and owner tokens?')) return;
+  busy = true; clearCredentials();
+  try {
+    await api(`/dashboard/attempts/${id}/owner`, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({owner_github_id:owner})});
+    $('owner-github-id').value = ''; $('error').textContent = '';
+  } catch (e) { $('error').textContent = e.message; }
+  finally { busy = false; }
+  refresh();
+};
 $('pause').onclick = () => action('pause'); $('resume').onclick = () => action('resume'); $('download').onclick = () => action('package');
 $('filter').onchange = refresh;
 $('version-filter').onchange = refresh;
+$('owner-filter').onchange = refresh;
 $('replay-retry').onclick = () => { replayId = null; refresh(); };
 $('logout').onclick = async () => { try { await api('/auth/logout', {method: 'POST'}); location.assign('/'); } catch (e) { $('error').textContent = e.message; } };
-(async () => { try { const me = await (await api('/dashboard/me')).json(); csrf = me.csrf; isOwner = me.role === 'owner'; $('account').textContent = `${me.login} · ${me.role}`; $('viewer-note').hidden = isOwner; await refresh(); setInterval(refresh, 1000); } catch (e) { $('error').textContent = e.message; } })();
+(async () => { try { const me = await (await api('/dashboard/me')).json(); csrf = me.csrf; isAdmin = me.role === 'admin'; $('account').textContent = `${me.login} · GitHub ID ${me.id}${isAdmin ? ' · Admin' : ''}`; $('viewer-note').hidden = isAdmin; await refresh(); setInterval(refresh, 1000); } catch (e) { $('error').textContent = e.message; } })();

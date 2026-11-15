@@ -241,7 +241,7 @@ def test_any_github_user_can_view_but_only_owner_can_control(tmp_path, monkeypat
             response, _ = await login(client, server, monkeypatch)
             assert response.status == 302
             me = await (await client.get('/dashboard/me')).json()
-            assert me['role'] == 'owner'
+            assert me['role'] == 'admin'
             headers['X-CSRF-Token'] = me['csrf']
             assert (await client.post(base+'/package', headers=headers)).status == 200
     asyncio.run(scenario())

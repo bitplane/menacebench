@@ -11,6 +11,7 @@ from urllib.parse import urlencode, urlsplit
 
 from aiohttp import ClientSession, ClientTimeout, ClientError, web
 from .attempt import Conflict
+from .access import github_id, run_blocking
 from .recording import recording
 from .leaderboard import leaderboard
 
@@ -64,11 +65,18 @@ class Browser:
         return session
 
     def role(self, session):
-        return 'owner' if self.config and session['id'] in self.config['owner_ids'] else 'viewer'
+        return 'admin' if self.config and session['id'] in self.config['owner_ids'] else 'viewer'
 
-    def require_owner(self, session):
-        if self.role(session) != 'owner':
-            raise web.HTTPForbidden(text='This action requires server owner access')
+    def can_manage(self, session, attempt):
+        return self.role(session) == 'admin' or attempt.info.get('owner_github_id') == session['id']
+
+    def require_owner(self, session, attempt):
+        if not self.can_manage(session, attempt):
+            raise web.HTTPForbidden(text='This action requires the run owner or a server admin')
+
+    def require_admin(self, session):
+        if self.role(session) != 'admin':
+            raise web.HTTPForbidden(text='This action requires server admin access')
 
     def cookie(self, response, name, value, age):
         response.set_cookie(name, value, max_age=age, httponly=True,
@@ -160,29 +168,36 @@ class Browser:
         s = self.session(request)
         return web.json_response({k: s[k] for k in ('login', 'id', 'csrf')} | {'role': self.role(s)})
 
-    def summary(self, a):
+    def summary(self, a, session):
         return a.status() | {'harness_version': a.info.get('harness_version'), 'character': a.character, 'player': a.info['metadata'],
-                             'last_activity': a.last_activity, 'session_seconds': a.clock()}
+                             'last_activity': a.last_activity, 'session_seconds': a.clock(),
+                             'owner_github_id': a.info.get('owner_github_id'),
+                             'is_mine': a.info.get('owner_github_id') == session['id'],
+                             'permissions': {'manage': self.can_manage(session, a),
+                                             'recover': self.can_manage(session, a) and a.state != 'finished',
+                                             'assign_owner': self.role(session) == 'admin'}}
 
     async def leaderboard(self, request):
         self.session(request)
         return web.json_response(leaderboard(self.server.attempts.values(), request.query.get('version')))
 
     async def attempts(self, request):
-        self.session(request)
+        session = self.session(request)
+        scope = request.query.get('scope', 'all')
+        if scope not in {'all', 'mine'}: raise web.HTTPBadRequest(text='Invalid attempt scope')
         attempts = sorted(self.server.attempts.values(), key=lambda a: a.last_activity, reverse=True)
-        return web.json_response([self.summary(a) for a in attempts])
+        return web.json_response([self.summary(a, session) for a in attempts
+                                  if scope == 'all' or a.info.get('owner_github_id') == session['id']])
 
     async def attempt(self, request):
         owner = self.session(request)
         a = self.server.attempts.get(request.match_info['id'])
         if a is None: raise web.HTTPNotFound()
         if request.method == 'GET':
-            return web.json_response(self.summary(a) | {'screen': a.frame.screen if a.frame else None})
+            return web.json_response(self.summary(a, owner) | {'screen': a.frame.screen if a.frame else None})
         action = request.match_info['action']
         disposition = 200
         try:
-            if action != 'replay': self.require_owner(owner)
             if action == 'replay':
                 if a.state != 'finished': raise Conflict('The attempt is still in progress')
                 if (a.path/'replay.cast').exists():
@@ -196,19 +211,49 @@ class Browser:
                     self.replays[a.id] = asyncio.create_task(self.build_recording(a))
                 disposition = 202
                 return web.json_response({'status':'preparing'}, status=202)
-            if action in {'pause', 'resume'}:
-                if action == 'resume': await self.server.resume_attempt(a)
-                else: await asyncio.to_thread(a.pause)
-                return web.json_response(self.summary(a))
-            if action == 'package':
-                folder = await asyncio.to_thread(a.package)
-                data = io.BytesIO()
-                with tarfile.open(fileobj=data, mode='w') as archive:
-                    for name in ('attempt.json', 'events.jsonl.gz'): archive.add(folder/name, arcname=name)
-                return web.Response(body=data.getvalue(), content_type='application/x-tar',
-                                    headers={'Content-Disposition': f'attachment; filename="{a.id}.tar"'})
-            disposition = 404
-            raise web.HTTPNotFound()
+            if action in {'recover-player', 'owner'}:
+                body = None
+                if action == 'owner':
+                    self.require_admin(owner)
+                    try:
+                        body = await request.json()
+                        if not isinstance(body, dict) or set(body) != {'owner_github_id'}:
+                            raise ValueError('Expected owner_github_id')
+                        github_id(body['owner_github_id'])
+                    except (ValueError, TypeError) as error:
+                        raise web.HTTPBadRequest(text=str(error)) from None
+                async with self.server.access[a.id].change():
+                    if action == 'owner': self.require_admin(owner)
+                    else: self.require_owner(owner, a)
+                    try:
+                        if action == 'recover-player':
+                            token = await run_blocking(a.rotate_player_token, owner['id'])
+                            return web.json_response({'id': a.id, 'player_token': token,
+                                                      'attempt_path': '/attempts/'+a.id,
+                                                      'status': a.status()},
+                                                     headers={'Cache-Control': 'no-store'})
+                        changed = await run_blocking(a.assign_owner, body['owner_github_id'], owner['id'])
+                    finally:
+                        self.server.index_tokens(a)
+                # Assignment revoked legacy bearer access, including open terminals.
+                if action == 'owner' and changed:
+                    for ws in list(self.server.terminals[a.id]):
+                        await ws.close(code=1008, message=b'Ownership changed; credential revoked')
+                return web.json_response(self.summary(a, owner))
+            async with self.server.access[a.id].operation():
+                self.require_owner(owner, a)
+                if action in {'pause', 'resume'}:
+                    if action == 'resume': await self.server.resume_attempt(a)
+                    else: await run_blocking(a.pause)
+                    return web.json_response(self.summary(a, owner))
+                if action == 'package':
+                    folder = await run_blocking(a.package)
+                    data = io.BytesIO()
+                    with tarfile.open(fileobj=data, mode='w') as archive:
+                        for name in ('attempt.json', 'events.jsonl.gz'): archive.add(folder/name, arcname=name)
+                    return web.Response(body=data.getvalue(), content_type='application/x-tar',
+                                        headers={'Content-Disposition': f'attachment; filename="{a.id}.tar"'})
+                raise web.HTTPNotFound()
         except Conflict as error:
             disposition = 409
             raise web.HTTPConflict(text=str(error)) from None

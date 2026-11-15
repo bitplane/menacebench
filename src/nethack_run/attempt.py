@@ -12,6 +12,7 @@ import threading
 import time
 import uuid
 from .engine import ROOT, FIXED_DATE, Game, clean_directory, replay, session_seed
+from .access import github_id
 from .storage import Journal, atomic_json, atomic_bytes, snapshot, sync_dir
 from .package import build_identity, exit_result
 
@@ -34,7 +35,8 @@ class Attempt:
             self.journal.append('created', attempt_id=self.id, metadata=self.info['metadata'], instance=self.info['instance'],
                                 player_md_digest=self.info['player_digest'], build_identity=self.info['build_identity'],
                                 image_digest=self.info['image_digest'], fixed_game_date=FIXED_DATE,
-                                harness_version=self.info.get('harness_version'))
+                                harness_version=self.info.get('harness_version'),
+                                initial_owner_github_id=self.info.get('initial_owner_github_id'))
         self.game = None
         self.frame = None
         self.started = None
@@ -67,12 +69,15 @@ class Attempt:
             elif e['type'] == 'checkpoint' and e.get('character'): self.character = e['character']
 
     @classmethod
-    def create(cls, root, metadata, instance, contributor=None, limits=None):
+    def create(cls, root, metadata, instance, contributor=None, limits=None, owner_github_id=None):
+        github_id(owner_github_id)
         identifier = str(uuid.uuid4())
         path = root/identifier; path.mkdir(mode=0o700)
         owner, player = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
         info = {'harness_version': VERSION, 'id': identifier, 'seed': secrets.token_hex(32), 'metadata': metadata,
                 'instance': instance, 'contributor': contributor, 'limits': limits or {},
+                'owner_github_id': owner_github_id, 'initial_owner_github_id': owner_github_id,
+                'player_token_generation': 0, 'access_audit': [],
                 'owner_hash': hashlib.sha256(owner.encode()).hexdigest(),
                 'player_hash': hashlib.sha256(player.encode()).hexdigest(),
                 'build_identity': build_identity(), 'image_digest': os.environ.get('NETHACK_IMAGE_DIGEST'),
@@ -87,6 +92,43 @@ class Attempt:
         for role in ('owner', 'player'):
             if secrets.compare_digest(self.info[role+'_hash'], digest): return role
         return None
+
+    def update_access(self, updates, actor, action, **details):
+        # One atomic private-file replacement commits both credentials and audit.
+        # Administrative changes never rewrite gameplay logs or frozen packages.
+        with self.lock:
+            event = dict(action=action, actor_github_id=actor, wall_time=time.time(), **details)
+            info = self.info | updates | {'access_audit': [*self.info.get('access_audit', []), event]}
+            try:
+                atomic_json(self.path/'private.json', info)
+            finally:
+                # A failure after rename must not leave the old token live in RAM.
+                self.info = json.loads((self.path/'private.json').read_bytes())
+
+    def rotate_player_token(self, actor):
+        with self.lock:
+            if self.state == 'finished': raise Conflict('Finished attempts cannot be resumed')
+            token = secrets.token_urlsafe(32)
+            generation = self.info.get('player_token_generation', 0) + 1
+            self.update_access({'player_hash': hashlib.sha256(token.encode()).hexdigest(),
+                                'player_token_generation': generation}, actor, 'rotate_player_token',
+                               generation=generation)
+            return token
+
+    def assign_owner(self, owner_github_id, actor):
+        with self.lock:
+            github_id(owner_github_id)
+            previous = self.info.get('owner_github_id')
+            if previous == owner_github_id: return False
+            generation = self.info.get('player_token_generation', 0) + 1
+            # A previous owner must not retain delegated bearer-token access.
+            self.update_access({'owner_github_id': owner_github_id,
+                                'player_hash': hashlib.sha256(secrets.token_bytes(32)).hexdigest(),
+                                'owner_hash': hashlib.sha256(secrets.token_bytes(32)).hexdigest(),
+                                'player_token_generation': generation}, actor, 'assign_owner',
+                               previous_owner_github_id=previous, owner_github_id=owner_github_id,
+                               generation=generation)
+            return True
 
     @property
     def work(self): return self.path/'work'
@@ -303,7 +345,8 @@ class Attempt:
             durations = [e['elapsed'] for e in ends]
             if self.outcome == 'abandoned' and self.state != 'saved' and len(ends)<self.session:
                 durations.append(self.elapsed)
-            manifest = {'harness_version': self.info.get('harness_version'), 'schema_version': 1, 'attempt_id': self.id, 'server_instance': self.info['instance'],
+            manifest = {'initial_owner_github_id': self.info.get('initial_owner_github_id'),
+                        'harness_version': self.info.get('harness_version'), 'schema_version': 1, 'attempt_id': self.id, 'server_instance': self.info['instance'],
                         'player_metadata': self.info['metadata'], 'player_md_digest': self.info['player_digest'],
                         'image_digest': self.info['image_digest'], 'build_identity': self.info['build_identity'],
                         'seed': self.info['seed'], 'fixed_game_date': FIXED_DATE,

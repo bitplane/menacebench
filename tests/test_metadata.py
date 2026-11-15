@@ -18,7 +18,7 @@ def test_reasoning_effort_round_trip_and_legacy_compatibility(tmp_path, endpoint
             assert response.status == 201
             attempt = server.attempts[(await response.json())['id']]
             assert attempt.info['metadata'] == metadata
-            assert server.browser.summary(attempt)['player'] == metadata
+            assert server.browser.summary(attempt, {'id': 999})['player'] == metadata
             assert attempt.journal.events[0]['metadata'] == metadata
             attempt.pause(); attempt.expire()
             package = attempt.package()
