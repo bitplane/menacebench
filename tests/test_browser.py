@@ -67,22 +67,18 @@ def test_owner_login_browse_controls_and_logout(tmp_path, monkeypatch):
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize('mode', ['wrong-owner', 'bad-nonce', 'expired', 'cancelled'])
+@pytest.mark.parametrize('mode', ['bad-nonce', 'expired', 'cancelled'])
 def test_login_rejects_invalid_authorization(tmp_path, monkeypatch, mode):
     async def scenario():
         server = Server(tmp_path/'runs', github_auth=CONFIG)
         async with wire_client(server, tmp_path) as client:
-            if mode == 'wrong-owner':
-                response, _ = await login(client, server, monkeypatch, user_id=999)
-                assert response.status == 403
-            else:
-                response = await client.get('/auth/github', allow_redirects=False, headers={'Host': urlsplit(server.browser.origin).netloc})
-                state = parse_qs(urlsplit(response.headers['Location']).query)['state'][0]
-                if mode == 'expired': server.browser.pending[state]['expires'] = 0
-                if mode == 'bad-nonce': client.cookie_jar.clear()
-                params = {'state': state, 'code': 'test-code'}
-                if mode == 'cancelled': params['error'] = 'access_denied'
-                assert (await client.get('/auth/github/callback', params=params, allow_redirects=False)).status == 400
+            response = await client.get('/auth/github', allow_redirects=False, headers={'Host': urlsplit(server.browser.origin).netloc})
+            state = parse_qs(urlsplit(response.headers['Location']).query)['state'][0]
+            if mode == 'expired': server.browser.pending[state]['expires'] = 0
+            if mode == 'bad-nonce': client.cookie_jar.clear()
+            params = {'state': state, 'code': 'test-code'}
+            if mode == 'cancelled': params['error'] = 'access_denied'
+            assert (await client.get('/auth/github/callback', params=params, allow_redirects=False)).status == 400
             assert not server.browser.sessions
             assert (await client.get('/dashboard/attempts')).status == 401
     asyncio.run(scenario())
@@ -207,3 +203,45 @@ def test_session_expiry_and_secure_cookie(tmp_path, monkeypatch):
     {'public_url': 'http://127.0.0.1:8756/path'}, {'client_secret': 'YOUR_SECRET'}])
 def test_invalid_owner_configuration_fails_closed(tmp_path, changes):
     with pytest.raises(ValueError): Server(tmp_path, github_auth=CONFIG | changes)
+
+
+def test_any_github_user_can_view_but_only_owner_can_control(tmp_path, monkeypatch):
+    async def scenario():
+        server = Server(tmp_path/'runs', github_auth=CONFIG)
+        async with wire_client(server, tmp_path) as client:
+            created = await (await client.post('/agent/start', json={})).json()
+            a = server.attempts[created['id']]
+            base = '/dashboard/attempts/'+a.id
+            response, _ = await login(client, server, monkeypatch, user_id=999)
+            assert response.status == 302
+            me = await (await client.get('/dashboard/me')).json()
+            assert me['role'] == 'viewer'
+            headers = {'Origin': CONFIG['public_url'], 'X-CSRF-Token': me['csrf']}
+            assert (await client.get('/')).status == 200
+            for path in ['/dashboard/attempts', '/dashboard/leaderboard', base]:
+                assert (await client.get(path)).status == 200
+            for action in ['pause', 'resume', 'package']:
+                assert (await client.post(base+'/'+action, headers=headers)).status == 403
+            assert a.state == 'running'
+            # A valid viewer cookie does not elevate an agent bearer token.
+            player = {'Authorization': 'Bearer '+created['player_token']}
+            assert (await client.get(base, headers=player)).status == 403
+            a.keys('Tester-Bar-Hum-Mal-Cha\ny#quit\ny'+' '*20, 1, 1)
+            assert a.state == 'finished'
+            assert (await client.post(base+'/package', headers=headers)).status == 403
+            assert not (a.path/'package').exists()
+            assert (await client.post(base+'/replay')).status == 403  # CSRF still required
+            assert (await client.post(base+'/replay', headers=headers)).status == 202
+            await server.browser.replays[a.id]
+            assert (await client.post(base+'/replay', headers=headers)).status == 200
+            assert (await client.get(base+'/replay')).status == 200
+            assert (await client.get(base+'/replay?download=1')).status == 200
+            assert (await client.post('/auth/logout', headers=headers)).status == 200
+            assert (await client.get(base)).status == 401
+            response, _ = await login(client, server, monkeypatch)
+            assert response.status == 302
+            me = await (await client.get('/dashboard/me')).json()
+            assert me['role'] == 'owner'
+            headers['X-CSRF-Token'] = me['csrf']
+            assert (await client.post(base+'/package', headers=headers)).status == 200
+    asyncio.run(scenario())

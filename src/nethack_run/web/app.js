@@ -1,6 +1,6 @@
 'use strict';
 const $ = id => document.getElementById(id);
-let csrf, selected = null, busy = false, lastList = '';
+let csrf, isOwner = false, selected = null, busy = false, lastList = '';
 let refreshEpoch = 0, lastLeaderboard = '';
 const scoreFormat = new Intl.NumberFormat(undefined, {maximumFractionDigits: 2});
 let replayId = null, replayPlayer = null, replayEpoch = 0;
@@ -132,9 +132,9 @@ async function refresh() {
       $('screen').textContent = a.screen || 'This session has ended. Its consumed keys are preserved in the trace.';
       $('screen').hidden = a.state === 'finished';
       showReplay(a);
-      $('pause').hidden = !['running', 'advancing'].includes(a.state);
-      $('resume').hidden = !['paused', 'saved'].includes(a.state);
-      $('download').hidden = $('package-note').hidden = a.state !== 'finished';
+      $('pause').hidden = !isOwner || !['running', 'advancing'].includes(a.state);
+      $('resume').hidden = !isOwner || !['paused', 'saved'].includes(a.state);
+      $('download').hidden = $('package-note').hidden = !isOwner || a.state !== 'finished';
       $('result').textContent = a.result ? `Score ${a.result.score} · ${a.result.turns} turns · Depth ${a.result.maximum_depth}\n${a.result.cause_of_death}` : '';
       showDetails(a);
     }
@@ -142,7 +142,7 @@ async function refresh() {
   } catch (e) { if (epoch === refreshEpoch) $('error').textContent = e.message; }
 }
 async function action(kind) {
-  if (!selected || busy) return;
+  if (!isOwner || !selected || busy) return;
   busy = true;
   try {
     const response = await api(`/dashboard/attempts/${selected}/${kind}`, {method: 'POST'});
@@ -159,4 +159,4 @@ $('filter').onchange = refresh;
 $('version-filter').onchange = refresh;
 $('replay-retry').onclick = () => { replayId = null; refresh(); };
 $('logout').onclick = async () => { try { await api('/auth/logout', {method: 'POST'}); location.assign('/'); } catch (e) { $('error').textContent = e.message; } };
-(async () => { try { const me = await (await api('/dashboard/me')).json(); csrf = me.csrf; $('account').textContent = me.login; await refresh(); setInterval(refresh, 1000); } catch (e) { $('error').textContent = e.message; } })();
+(async () => { try { const me = await (await api('/dashboard/me')).json(); csrf = me.csrf; isOwner = me.role === 'owner'; $('account').textContent = `${me.login} · ${me.role}`; $('viewer-note').hidden = isOwner; await refresh(); setInterval(refresh, 1000); } catch (e) { $('error').textContent = e.message; } })();

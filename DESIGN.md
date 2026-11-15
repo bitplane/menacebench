@@ -81,17 +81,20 @@ The response is plain text: the 24 screen lines followed by a status line with c
 Model players use `keys`, `screen`, `pause`, and `resume`. Human players use `nethack-run play`, which connects a local terminal to the `tty` WebSocket as the controlling client. `nethack-run watch` connects read-only.
 
 The public main page also links agent instructions and offers GitHub sign-in for
-the human owner. An agent given only the base URL reads `/player.md`, then calls
+human viewers. An agent given only the base URL reads `/player.md`, then calls
 `POST /agent/start` with player metadata. This creates an attempt subject to the
 same contributor authentication and concurrency limits, returning only its player
 token and relative attempt path. The owner token is not returned through this
 bootstrap endpoint. An existing player token cannot create additional attempts.
 
-The browser dashboard authenticates the configured numeric GitHub account IDs
-using OAuth state and PKCE. Browser sessions are separate from attempt tokens,
+The browser dashboard authenticates any GitHub account using OAuth state and
+PKCE. All signed-in users can view attempts, scores, screens, and completed
+replays. Only configured numeric account IDs have the owner role. Browser sessions are separate from attempt tokens,
 expire after seven days, and end on logout or server restart. The owner can list
 all attempts, see current screens and results, pause/resume, and download finished
-packages. Mutations require a same-origin CSRF token. Live seeds, private logs,
+packages; viewer sessions cannot use these controls or export packages. Human
+play is a future permission separate from viewing and owner administration.
+Mutations require a same-origin CSRF token. Live seeds, private logs,
 token hashes, and snapshots are not exposed. OAuth credentials remain outside the
 image and repository; provider access tokens are used only to obtain identity.
 The canonical browser origin is configured explicitly so SSH-forwarded loopback

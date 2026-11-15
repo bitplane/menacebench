@@ -90,12 +90,12 @@ verification.
 
 ## Browser login
 
-The owner dashboard at `http://127.0.0.1:8756` lists ongoing and completed attempts,
-shows the current screen, and supports pause, resume, and finished trace-package
-downloads. Select a completed attempt to play its asciinema recording, seek,
+The dashboard at `http://127.0.0.1:8756` lets anyone with a GitHub account view
+ongoing and completed attempts, current screens, model scores, and replays.
+Only configured owners can pause/resume games or download trace packages. Select a completed attempt to play its asciinema recording, seek,
 change playback speed, or download the `.cast` file. Recordings are prepared on
 first viewing and cached, including for attempts completed before the viewer
-was added. Browser owner sessions are separate from bot player tokens. The UI
+was added. Browser sessions are separate from bot player tokens. The UI
 never returns live seeds, token hashes, or private snapshots.
 The public landing page has separate human sign-in and agent-start instructions.
 
@@ -117,8 +117,11 @@ development, use `./nethack-run serve --github-auth config/github-auth.local.jso
 Without configuration, the game API remains available but browser login is disabled.
 
 Login uses GitHub's authorization-code flow with state and PKCE, requesting no
-repository or email scopes. Only the configured numeric account IDs receive
-owner access. Browser cookies are HttpOnly and SameSite=Lax (also Secure on
+repository or email scopes. Any valid GitHub account receives viewer access;
+only the configured numeric account IDs in `owner_ids` receive owner access.
+`GET /dashboard/me` reports `role` as `viewer` or `owner`. Viewer replay preparation
+still requires CSRF protection. Viewer login does not grant a player token or
+permission to control games; browser-based human play is a future feature. Browser cookies are HttpOnly and SameSite=Lax (also Secure on
 HTTPS); mutations require a same-origin CSRF token. Sessions expire after seven
 days and are cleared by server restart or sign-out. GitHub access tokens are
 used only to obtain identity and are not retained. OAuth codes and secrets are

@@ -1,4 +1,4 @@
-"""GitHub owner login and a browser view, separate from player-token routes."""
+"""GitHub viewer login with owner controls, separate from player-token routes."""
 import asyncio
 import base64
 import hashlib
@@ -62,6 +62,13 @@ class Browser:
                     request.headers.get('X-CSRF-Token', ''), session['csrf'])):
                 raise web.HTTPForbidden(text='Invalid browser request')
         return session
+
+    def role(self, session):
+        return 'owner' if self.config and session['id'] in self.config['owner_ids'] else 'viewer'
+
+    def require_owner(self, session):
+        if self.role(session) != 'owner':
+            raise web.HTTPForbidden(text='This action requires server owner access')
 
     def cookie(self, response, name, value, age):
         response.set_cookie(name, value, max_age=age, httponly=True,
@@ -129,8 +136,9 @@ class Browser:
         try: identity = await self.identity(code, pending['verifier'])
         except (ClientError, asyncio.TimeoutError, ValueError, KeyError):
             raise web.HTTPBadGateway(text='GitHub login failed. Please try again.') from None
-        if identity.get('id') not in self.config['owner_ids']:
-            raise web.HTTPForbidden(text='This GitHub account is not an owner of this server')
+        if (type(identity.get('id')) is not int or identity['id'] <= 0
+                or not isinstance(identity.get('login'), str) or not identity['login']):
+            raise web.HTTPBadGateway(text='GitHub returned an invalid identity')
         self.sessions.pop(request.cookies.get(COOKIE), None)
         if len(self.sessions) >= 128: raise web.HTTPTooManyRequests()
         key = secrets.token_urlsafe(32)
@@ -150,7 +158,7 @@ class Browser:
 
     async def me(self, request):
         s = self.session(request)
-        return web.json_response({k: s[k] for k in ('login', 'id', 'csrf')})
+        return web.json_response({k: s[k] for k in ('login', 'id', 'csrf')} | {'role': self.role(s)})
 
     def summary(self, a):
         return a.status() | {'harness_version': a.info.get('harness_version'), 'character': a.character, 'player': a.info['metadata'],
@@ -174,6 +182,7 @@ class Browser:
         action = request.match_info['action']
         disposition = 200
         try:
+            if action != 'replay': self.require_owner(owner)
             if action == 'replay':
                 if a.state != 'finished': raise Conflict('The attempt is still in progress')
                 if (a.path/'replay.cast').exists():
