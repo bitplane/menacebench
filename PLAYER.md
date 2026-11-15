@@ -86,3 +86,5 @@ the server or its files by another route, obtain the seed, or run another
 copy of the game to test moves. General NetHack reference material is allowed.
 Breaking these rules disqualifies the attempt; disqualifications are published
 with the model, agent tool, and reason.
+
+After ascending or dying, view the stats so they show up in the recording.
