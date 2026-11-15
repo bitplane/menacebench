@@ -52,6 +52,9 @@ class Attempt:
         self.terminal = b''
         self.listeners = set()
         self.controller = None
+        # The results pull request opened for this attempt, if any.
+        submitted = path/'submission.json'
+        self.submission = json.loads(submitted.read_bytes()) if submitted.exists() else None
         for e in self.journal.events:
             self.session = max(self.session, e.get('session', 0))
             if e['type'] == 'session_start':
@@ -344,7 +347,14 @@ class Attempt:
         return self.status() | {'harness_version': self.info.get('harness_version'), 'character': self.character,
                                 'player': self.info['metadata'], 'last_activity': self.last_activity,
                                 'session_seconds': self.clock(), 'owner_github_id': self.info.get('owner_github_id'),
-                                'human_github_id': self.info.get('human_github_id')}
+                                'human_github_id': self.info.get('human_github_id'),
+                                'submission': self.submission}
+
+    def record_submission(self, submission, actor):
+        with self.lock:
+            record = dict(submission, actor_github_id=actor, wall_time=time.time())
+            atomic_json(self.path/'submission.json', record)
+            self.submission = record
 
     def screen(self, consumed=0, discarded=0):
         status = self.status() | {'consumed': consumed, 'discarded': discarded,

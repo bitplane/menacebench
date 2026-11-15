@@ -4,10 +4,12 @@ NETHACK_CONTAINER_ENGINE ?= podman
 PORT ?= 8756
 CONCURRENCY ?= 100
 GITHUB_AUTH_CONFIG ?= $(wildcard config/github-auth.local.json)
+# Fine-grained token for the results repository; enables run submission.
+RESULTS_TOKEN ?= $(wildcard config/results-token.local)
 comma := ,
 CONTAINER_NAME ?= nethack-run
-RUN_FLAGS = -p 127.0.0.1:$(PORT):8000 --mount type=volume,src=nethack-runs,dst=/runs $(if $(GITHUB_AUTH_CONFIG),--secret nethack-github-auth$(comma)target=/run/github-auth.json$(comma)uid=1000$(comma)gid=1000$(comma)mode=0400) -e NETHACK_IMAGE_DIGEST="$$(cat build/image-id)"
-SERVER_ARGS = serve --host 0.0.0.0 --port 8000 --state /runs --concurrency $(CONCURRENCY) $(if $(GITHUB_AUTH_CONFIG),--github-auth /run/github-auth.json)
+RUN_FLAGS = -p 127.0.0.1:$(PORT):8000 --mount type=volume,src=nethack-runs,dst=/runs $(if $(GITHUB_AUTH_CONFIG),--secret nethack-github-auth$(comma)target=/run/github-auth.json$(comma)uid=1000$(comma)gid=1000$(comma)mode=0400) $(if $(RESULTS_TOKEN),--secret nethack-results-token$(comma)target=/run/results-token$(comma)uid=1000$(comma)gid=1000$(comma)mode=0400) -e NETHACK_IMAGE_DIGEST="$$(cat build/image-id)"
+SERVER_ARGS = serve --host 0.0.0.0 --port 8000 --state /runs --concurrency $(CONCURRENCY) $(if $(GITHUB_AUTH_CONFIG),--github-auth /run/github-auth.json) $(if $(RESULTS_TOKEN),--results-token /run/results-token)
 export NETHACK_CONTAINER_ENGINE
 .PHONY: setup test verify-build
 setup:
@@ -26,9 +28,18 @@ image:
 	$(NETHACK_CONTAINER_ENGINE) build --platform linux/amd64 -t localhost/nethack-run:local .
 	python3 scripts/record_image.py localhost/nethack-run:local
 
+# Use a published official image instead of a local build, so runs record a
+# registry digest the results CI can pull and replay.
+.PHONY: pull
+pull:
+	test -n "$(IMAGE)" || { echo 'Set IMAGE=ghcr.io/bitplane/menacebench@sha256:...' >&2; exit 1; }
+	$(NETHACK_CONTAINER_ENGINE) pull "$(IMAGE)"
+	python3 scripts/record_image.py --registry "$(IMAGE)"
+
 .PHONY: run up down logs auth-secret
 auth-secret:
 	$(if $(GITHUB_AUTH_CONFIG),$(NETHACK_CONTAINER_ENGINE) secret create --replace nethack-github-auth "$(abspath $(GITHUB_AUTH_CONFIG))",@true)
+	$(if $(RESULTS_TOKEN),$(NETHACK_CONTAINER_ENGINE) secret create --replace nethack-results-token "$(abspath $(RESULTS_TOKEN))",@true)
 
 run: auth-secret
 	$(NETHACK_CONTAINER_ENGINE) run --rm $(RUN_FLAGS) "$$(cat build/image-id)" $(SERVER_ARGS)

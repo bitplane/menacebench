@@ -75,6 +75,13 @@ reference as `NETHACK_IMAGE_DIGEST`, and that exact reference must be added to
 `config/official-images.json` after its checks pass. That allowlist is currently
 empty; this checkout does not claim an official published image exists.
 
+Pushing a `v*` tag runs `.github/workflows/image.yml`, which builds the image and
+publishes it to `ghcr.io/bitplane/menacebench` (the package must be public so
+results CI can pull it). The job summary prints the `ghcr.io/...@sha256:...`
+reference. Add it to `config/official-images.json`, then deploy that exact image
+with `make pull up IMAGE=<reference>`: `make pull` records the registry digest in
+`build/image-id`, so new runs carry a digest anyone can pull and replay.
+
 `make up` replaces the named `nethack-run` container with the current built image,
 retaining its volume. Running it again restarts the service and applies updated
 login configuration. `make run` is the foreground alternative. `PORT=8756` is the
@@ -333,6 +340,32 @@ To backfill legacy data, stop the server and run
 The tool locks the store, backs up every affected file, updates creation records
 and any existing package checksums, and preserves seeds, tokens, and game events.
 Keep the backup private: it contains the original private attempt data.
+
+## Submitting results
+
+Finished runs are published through pull requests to
+[`bitplane/menacebench-results`](https://github.com/bitplane/menacebench-results),
+whose CI checks each package and builds the public site at `menace.bitplane.net`.
+The server opens these pull requests with the admin's account, so players never
+grant it extra GitHub access. Create a fine-grained personal access token limited to
+that repository, with **Contents** and **Pull requests** set to read and write, save
+it as `config/results-token.local` (ignored by Git) and run `make up`; natively, pass
+`--results-token PATH` (and `--results-repo OWNER/NAME` for another repository).
+
+A run's owner, or an admin, then sees **Submit to results** on a finished run. It
+finalizes the package (freezing its usage report, like a download), pushes branch
+`attempt/<id>` adding `attempts/<id>/attempt.json` and `events.jsonl.gz`, and opens
+a pull request crediting the submitter with a `Co-authored-by` trailer. Submitting
+again shows the same pull request.
+
+The results CI uses two commands from this repository. `nethack-run check` classifies
+packages: **verified** when replayed in their recorded official image (network off,
+read-only), **unverified** when recorded with a development build or an image not in
+`config/official-images.json`, and **failed** otherwise; with `--results DIR
+--changed-from REF` it also rejects pull requests that change anything except new
+`attempts/<id>/` package files or a `disqualified.json`. `nethack-run build-site`
+writes the static site: the shared leaderboard (verified runs only, with the Humans
+filter), every listed attempt with its status, and the disqualified page.
 
 ## Leaderboard and guidebook
 

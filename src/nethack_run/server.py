@@ -28,9 +28,12 @@ EVICT_AFTER = 300
 
 class Server:
     def __init__(self, root, instance='local', contributors=None, concurrency=100, limits=None, github_auth=None,
-                 cast_cache=None):
+                 cast_cache=None, submitter=None):
         self.root = Path(root); self.root.mkdir(parents=True, exist_ok=True)
         self.cast_cache = DEFAULT_CACHE | (cast_cache or {})
+        # Opens results pull requests with the admin's token; None disables submission.
+        self.submitter = submitter
+        self.submitting = set()
         self.instance = instance
         self.contributors = contributors
         self.concurrency = concurrency

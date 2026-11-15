@@ -52,7 +52,7 @@ def test_owned_recovery_persists_without_resuming_or_changing_game(tmp_path, mon
             headers = await sign_in(client, server, monkeypatch)
             mine = await (await client.get('/dashboard/attempts?scope=mine')).json()
             assert [r['id'] for r in mine] == [a.id]
-            assert mine[0]['permissions'] == {'manage': True, 'recover': True, 'play': False, 'assign_owner': False, 'delete': False}
+            assert mine[0]['permissions'] == {'manage': True, 'recover': True, 'play': False, 'submit': False, 'assign_owner': False, 'delete': False}
             assert (await client.post(dash+'/owner', headers=headers, json={'owner_github_id': 1000})).status == 403
             assert (await client.post(dash+'/recover-player')).status == 403
             assert (await client.post(dash+'/recover-player', headers=bearer(original))).status == 403

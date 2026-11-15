@@ -13,6 +13,7 @@ from aiohttp import ClientSession, ClientTimeout, ClientError, web
 from .attempt import Conflict
 from .access import github_id, run_blocking
 from .recording import CAST, cached, recording, touch
+from .submission import SubmissionError
 from .leaderboard import leaderboard
 
 ASSETS = Path(__file__).with_name('web')
@@ -190,6 +191,8 @@ class Browser:
                                              'recover': (self.can_manage(session, row) and row['state'] != 'finished'
                                                          and row.get('human_github_id') is None),
                                              'play': self.can_play(session, row),
+                                             'submit': (self.server.submitter is not None and row['state'] == 'finished'
+                                                        and self.can_manage(session, row) and not row.get('submission')),
                                              'assign_owner': self.role(session) == 'admin',
                                              'delete': self.role(session) == 'admin'}}
 
@@ -303,6 +306,8 @@ class Browser:
                     if action == 'resume': await self.server.resume_attempt(a)
                     else: await run_blocking(a.pause)
                     return web.json_response(self.summary(a, owner))
+                if action == 'submit':
+                    return await self.submit(a, owner)
                 if action == 'package':
                     folder = await run_blocking(a.package)
                     data = io.BytesIO()
@@ -320,6 +325,26 @@ class Browser:
         finally:
             if not a.deleted:
                 await asyncio.to_thread(a.audit, request.method, request.path, 'github:'+str(owner['id']), disposition)
+
+    async def submit(self, a, session):
+        """Finalize the package and open its results pull request with the admin token."""
+        if self.server.submitter is None:
+            raise web.HTTPServiceUnavailable(text='Results submission is not configured on this server')
+        if a.state != 'finished': raise Conflict('Only finished attempts can be submitted')
+        if a.submission: return web.json_response(self.summary(a, session))
+        if a.id in self.server.submitting: raise Conflict('This attempt is already being submitted')
+        self.server.submitting.add(a.id)
+        try:
+            # Submitting finalizes the package, freezing its usage report.
+            folder = await run_blocking(a.package)
+            try:
+                pull = await self.server.submitter.submit(folder, session['login'], session['id'])
+            except (SubmissionError, ClientError, OSError, asyncio.TimeoutError, KeyError, ValueError) as error:
+                raise web.HTTPBadGateway(text=f'Could not open the results pull request: {error}') from None
+            await run_blocking(a.record_submission, pull, session['id'])
+        finally:
+            self.server.submitting.discard(a.id)
+        return web.json_response(self.summary(a, session))
 
     async def build_recording(self, attempt):
         async with self.replay_slots:

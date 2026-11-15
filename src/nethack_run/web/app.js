@@ -154,6 +154,9 @@ async function refresh() {
       $('pause').hidden = !permissions.manage || !['running', 'advancing'].includes(a.state);
       $('resume').hidden = !permissions.manage || !['paused', 'saved'].includes(a.state);
       $('download').hidden = $('package-note').hidden = !permissions.manage || a.state !== 'finished';
+      $('submit').hidden = !permissions.submit;
+      $('submission').hidden = !a.submission;
+      if (a.submission) $('submission').href = a.submission.url;
       $('result').textContent = a.result ? `Score ${a.result.score} · ${a.result.turns} turns · Depth ${a.result.maximum_depth}\n${a.result.cause_of_death}` : '';
       showDetails(a);
     }
@@ -289,6 +292,9 @@ $('owner-assignment').onsubmit = async event => {
   } catch (e) { $('error').textContent = e.message; }
   finally { busy = false; }
   refresh();
+};
+$('submit').onclick = () => {
+  if (confirm('Open a pull request adding this run to the public results? This finalizes the package, including its usage report.')) action('submit');
 };
 $('pause').onclick = () => action('pause'); $('resume').onclick = () => action('resume'); $('download').onclick = () => action('package');
 $('filter').onchange = refresh;
