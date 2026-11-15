@@ -7,8 +7,9 @@
   admission per contributor (all local attempts share one pool). Configure with
   `make up CONCURRENCY=100`. Full capacity returns 429 without invalidating tokens.
   An isolated 100-process test measured 615.7 MiB combined game RSS and 39.8 MiB
-  server RSS; ten paused games resumed successfully. Long event histories still
-  consume memory after their processes stop.
+  server RSS; ten paused games resumed successfully. Finished attempts leave
+  memory after five idle minutes and are listed from a SQLite index; paused and
+  saved attempts keep their event history in memory until they finish or expire.
 - **Player pause when blocked.** Players can pause their own attempt. PLAYER.md
   explains confirmation, reporting the interruption, and resuming the same game.
   Idle pause remains 30 minutes; paused/saved expiry remains seven days.

@@ -146,14 +146,28 @@ Verification compares the screen hash at every checkpoint, how each session's ga
 `nethack-run export <package>` replays the attempt, captures the raw terminal output, and writes an asciicast v3 file paced by the recorded key timestamps. Output is timed to the key that produced it, so the pacing is a close reconstruction and not a capture of when each terminal update originally appeared. Pauses and gaps between sessions are collapsed.
 
 The owner dashboard embeds a locally bundled asciinema player for completed
-attempts. On first viewing, it reconstructs and atomically caches `replay.cast`
-beside the attempt, using the same verifier/exporter and an immutable temporary
+attempts. On first viewing, it reconstructs and atomically caches
+`replay.cast.gz` beside the attempt, using the same verifier/exporter and an immutable temporary
 package snapshot. This does not finalize the public package or freeze usage.
 Only one recording is generated at a time. Every checkpoint and final result
 must match before publication; older-image reproduction is marked diagnostic in
 the `replay.json` sidecar. Divergent recordings are not served. The owner may
 download the cast, while player tokens cannot access replay endpoints. The
 two-file run-package format remains unchanged.
+
+Recordings are a disposable cache, never a record. They are stored gzip-compressed
+and served as-is with `Content-Encoding: gzip` (decompressed on the fly for clients
+that do not accept gzip). The server deletes recordings unwatched for a week, then
+the least recently watched while the cache exceeds its size budget or free disk
+space runs low. A deleted recording is rebuilt from the event log when next watched.
+
+The server keeps unfinished attempts in memory. Finished attempts are summarized in
+a SQLite index (`.index.sqlite` in the state directory) and loaded from their folder
+only when used, then dropped again after five idle minutes. The attempt folders stay
+authoritative: each index row carries a fingerprint of `private.json` and
+`events.jsonl`, rows are rebuilt at startup when it no longer matches, and deleting
+the database only costs one full scan. The dashboard and leaderboard read summaries;
+the leaderboard is a pure function of summary rows so CI can reuse it.
 
 The test corpus contains startup and every character-selection path, ordinary movement, menus, type-ahead across an unexpected prompt, a retried `keys` request, death, save and resume, pause and resume at several points including mid-prompt and mid-menu, and a long run. Tests play each case through the API and replay it in a separate process. A build change must pass the corpus.
 

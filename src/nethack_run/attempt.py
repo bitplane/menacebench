@@ -166,7 +166,7 @@ class Attempt:
             self.frame = self.game.frame; self.state = 'running'; self.outcome = None
             if self.game.exited: self.finish_session()
             self.publish()
-            self.last_activity = time.time()
+            if self.state != 'finished': self.last_activity = time.time()
 
     def record_key(self, boundary, key):
         self.journal.append('key', session=self.session, boundary=boundary, key=key, elapsed=self.clock())
@@ -212,14 +212,16 @@ class Attempt:
                 if self.game.exited: self.finish_session()
                 self.advancing = False
                 self.publish()
-            self.last_activity = time.time()
+            # A finished attempt keeps its journaled end time, so a reload matches.
+            if self.state != 'finished': self.last_activity = time.time()
             return consumed, len(keys)-consumed
 
     def finish_session(self):
         outcome, result = exit_result(self.work, self.game.exit_code)
         elapsed = self.clock()
-        self.journal.append('session_end', session=self.session, outcome=outcome, result=result,
-                            elapsed=elapsed, wall_time=time.time())
+        event = self.journal.append('session_end', session=self.session, outcome=outcome, result=result,
+                                    elapsed=elapsed, wall_time=time.time())
+        self.last_activity = event['wall_time']
         self.elapsed = elapsed; self.started = None
         self.outcome = outcome; self.result = result
         self.state = 'saved' if outcome == 'saved' else 'finished'
@@ -332,7 +334,13 @@ class Attempt:
                 'state': 'advancing' if self.state == 'running' and self.advancing else self.state,
                 'accepting_input': self.state == 'running' and not self.advancing,
                 'outcome': self.outcome, 'result': self.result,
-                'key_count': sum(e['type']=='key' for e in self.journal.events), 'usage': self.usage}
+                'key_count': self.journal.counts['key'], 'usage': self.usage}
+
+    def summary(self):
+        """Public, session-independent row shared by the dashboard, index and leaderboard."""
+        return self.status() | {'harness_version': self.info.get('harness_version'), 'character': self.character,
+                                'player': self.info['metadata'], 'last_activity': self.last_activity,
+                                'session_seconds': self.clock(), 'owner_github_id': self.info.get('owner_github_id')}
 
     def screen(self, consumed=0, discarded=0):
         status = self.status() | {'consumed': consumed, 'discarded': discarded,

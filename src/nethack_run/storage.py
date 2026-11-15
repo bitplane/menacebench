@@ -1,4 +1,5 @@
 """Durable records and atomic publication on a local filesystem."""
+from collections import Counter
 import json
 import os
 from pathlib import Path
@@ -54,6 +55,8 @@ class Journal:
     def __init__(self, path: Path):
         self.path = path
         self.events = []
+        # Per-type totals keep status polling O(1) on long histories.
+        self.counts = Counter()
         if not path.exists():
             atomic_bytes(path, b'')
         with path.open('rb+') as file:
@@ -68,6 +71,7 @@ class Journal:
                 if event.get('seq') != len(self.events) + 1:
                     raise ValueError('Nonsequential journal')
                 self.events.append(event)
+                self.counts[event.get('type')] += 1
                 offset += len(line)
 
     def append(self, kind, **fields):
@@ -78,4 +82,5 @@ class Journal:
             file.flush()
             os.fsync(file.fileno())
         self.events.append(event)
+        self.counts[kind] += 1
         return event

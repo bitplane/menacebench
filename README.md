@@ -170,8 +170,14 @@ package download, `package/` contains `attempt.json` and `events.jsonl.gz`.
 Later requests are audited separately in `audit.jsonl`. `make down` and container
 replacement preserve this volume. Native runs use `--state` (default `runs/`).
 
-The dashboard caches asciicast v3 recordings as `/runs/<attempt-id>/replay.cast`,
-with reproduction details in `replay.json`. It reconstructs terminal output from
+The dashboard caches gzip-compressed asciicast v3 recordings as
+`/runs/<attempt-id>/replay.cast.gz`, with reproduction details in `replay.json`.
+Recordings are only a cache: they are rebuilt from the event log on demand and
+pruned by `--cast-ttl` (default one week unwatched), `--cast-cache-bytes` (default
+2 GiB in total) and `--min-free-bytes` (default 2 GiB of free disk). Older plain
+`replay.cast` files are compressed the next time they are watched. Finished
+attempts are listed from a rebuildable SQLite index, `/runs/.index.sqlite`, and are
+only loaded into memory while in use. It reconstructs terminal output from
 the durable recorded inputs, comparing every checkpoint and final result before
 publishing the file. Generation runs off the request loop, one recording at a
 time. Older image recordings are allowed only when they reproduce under the

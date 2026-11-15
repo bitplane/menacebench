@@ -71,6 +71,9 @@ def main(argv=None):
     serve.add_argument('--duration',type=float,default=86400)
     serve.add_argument('--events',type=int,default=1000000)
     serve.add_argument('--expiry',type=float,default=604800)
+    serve.add_argument('--cast-ttl',type=float,default=7*86400,help='Seconds an unwatched cached recording is kept')
+    serve.add_argument('--cast-cache-bytes',type=int,default=2*1024**3,help='Total size budget for cached recordings')
+    serve.add_argument('--min-free-bytes',type=int,default=2*1024**3,help='Evict cached recordings while free disk space is below this')
     for name in ('replay','export'):
         p=sub.add_parser(name);p.add_argument('package',type=Path)
         if name=='export':p.add_argument('--output',type=Path,required=True)
@@ -81,9 +84,11 @@ def main(argv=None):
     if args.command=='serve':
         limits={k:getattr(args,k) for k in ('idle','duration','events','expiry')}
         if any(value<=0 for value in limits.values()) or args.concurrency<1:parser.error('Limits must be positive')
+        cast_cache={'ttl':args.cast_ttl,'max_bytes':args.cast_cache_bytes,'min_free_bytes':args.min_free_bytes}
+        if args.cast_ttl<=0 or args.cast_cache_bytes<0 or args.min_free_bytes<0:parser.error('Cache limits must be positive')
         contributors=json.loads(args.contributors.read_text()) if args.contributors else None
         github_auth=json.loads(args.github_auth.read_text()) if args.github_auth else None
-        server=Server(args.state,args.instance,contributors,args.concurrency,limits,github_auth)
+        server=Server(args.state,args.instance,contributors,args.concurrency,limits,github_auth,cast_cache)
         web.run_app(server.app(),host=args.host if not args.unix_socket else None,
                     port=args.port if not args.unix_socket else None,path=args.unix_socket,access_log=None)
     elif args.command in ('replay','export'):

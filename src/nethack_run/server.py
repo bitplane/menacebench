@@ -8,24 +8,41 @@ import io
 import json
 from pathlib import Path
 import tarfile
+import threading
 import time
 import shutil
 import uuid
+import weakref
 from aiohttp import web, WSMsgType
 from .attempt import Attempt, Conflict
 from .access import AccessGate, github_id, run_blocking
 from .engine import ROOT
+from .index import Index, fingerprint
+from .recording import DEFAULT_CACHE, prune
 from .storage import atomic_json, sync_dir
+
+# Finished attempts leave memory after this long without use. Their summaries
+# stay in the SQLite index and the attempt reloads from disk on demand.
+EVICT_AFTER = 300
 
 
 class Server:
-    def __init__(self, root, instance='local', contributors=None, concurrency=100, limits=None, github_auth=None):
+    def __init__(self, root, instance='local', contributors=None, concurrency=100, limits=None, github_auth=None,
+                 cast_cache=None):
         self.root = Path(root); self.root.mkdir(parents=True, exist_ok=True)
+        self.cast_cache = DEFAULT_CACHE | (cast_cache or {})
         self.instance = instance
         self.contributors = contributors
         self.concurrency = concurrency
         self.limits = limits or {'idle': 1800, 'duration': 86400, 'events': 1000000, 'expiry': 604800}
+        # Loaded attempts: every unfinished one, plus recently used finished ones.
         self.attempts = {}
+        # Evicted attempts still referenced elsewhere (a request in flight) must
+        # not be loaded twice: two objects would interleave journal sequence numbers.
+        self.evicted = weakref.WeakValueDictionary()
+        self.used = {}
+        self.load_lock = threading.Lock()
+        self.index = Index(self.root/'.index.sqlite')
         self.token_index = {}
         self.access = defaultdict(AccessGate)
         self.terminals = defaultdict(set)
@@ -35,6 +52,8 @@ class Server:
         self.deleted_ids = set()
         self.pending_deletions = set()
         self.next_cleanup = 0
+        self.next_eviction = 0
+        self.next_cast_prune = 0
         self.cleanup_lock = asyncio.Lock()
         from .browser import Browser
         self.browser = Browser(self, github_auth)
@@ -53,13 +72,25 @@ class Server:
             self.deleted_ids.add(path.stem)
         self.pending_deletions = set(self.deleted_ids)
         await self.cleanup_deleted()
+        present = set()
         for path in self.root.iterdir():
             if path.name in self.deleted_ids: continue
             if path.is_dir() and (path/'private.json').exists():
-                attempt = Attempt(path)
+                present.add(path.name)
+                # A finished attempt whose files are unchanged since its row was
+                # written stays on disk; only its index row is consulted.
+                row = self.index.row(path.name)
+                if row and row[0] == 'finished' and row[1] == await asyncio.to_thread(fingerprint, path):
+                    continue
+                attempt = await asyncio.to_thread(Attempt, path)
                 await asyncio.to_thread(attempt.recover)
+                await asyncio.to_thread(self.index.put, attempt)
+                if attempt.state == 'finished': continue
                 self.attempts[attempt.id] = attempt
+                self.used[attempt.id] = time.monotonic()
                 self.index_tokens(attempt)
+        for identifier in self.index.ids()-present:
+            self.index.remove(identifier)
         self.monitor_task = asyncio.create_task(self.monitor())
 
     async def stop(self, app):
@@ -68,7 +99,9 @@ class Server:
             with contextlib.suppress(asyncio.CancelledError): await self.monitor_task
         for attempt in list(self.attempts.values()):
             if attempt.state == 'running': await asyncio.to_thread(attempt.pause, 'shutdown')
-
+        for attempt in list(self.attempts.values()):
+            await asyncio.to_thread(self.index.put, attempt)
+        self.index.close()
         if self.state_lock: self.state_lock.close()
 
     async def monitor(self):
@@ -77,6 +110,84 @@ class Server:
             await self.enforce_limits()
             if self.pending_deletions and time.monotonic() >= self.next_cleanup:
                 await self.cleanup_deleted()
+            if time.monotonic() >= self.next_eviction:
+                self.next_eviction = time.monotonic()+30
+                await self.evict_idle()
+            if time.monotonic() >= self.next_cast_prune:
+                self.next_cast_prune = time.monotonic()+600
+                await self.prune_casts()
+
+    async def prune_casts(self):
+        try:
+            await asyncio.to_thread(prune, self.root, self.cast_cache['ttl'], self.cast_cache['max_bytes'],
+                                    self.cast_cache['min_free_bytes'])
+        except OSError:
+            pass
+
+    async def evict_idle(self, idle=EVICT_AFTER):
+        """Write finished, unused attempts to the index and drop them from memory."""
+        now = time.monotonic()
+        for a in list(self.attempts.values()):
+            replay = self.browser.replays.get(a.id)
+            if (a.state != 'finished' or now-self.used.get(a.id, 0) < idle or self.terminals.get(a.id)
+                    or (replay is not None and not replay.done())
+                    or self.access[a.id].active or self.access[a.id].changing):
+                continue
+            await asyncio.to_thread(self.index.put, a)
+            # Never block the event loop on a disk load in progress; retry later.
+            if not self.load_lock.acquire(blocking=False): return
+            try:
+                if self.attempts.get(a.id) is not a: continue
+                del self.attempts[a.id]
+                self.evicted[a.id] = a
+                self.used.pop(a.id, None)
+                self.access.pop(a.id, None)
+                self.terminals.pop(a.id, None)
+                for digest, (known, _) in list(self.token_index.items()):
+                    if known is a: del self.token_index[digest]
+            finally:
+                self.load_lock.release()
+
+    def load(self, identifier):
+        """Return the single live object for an attempt, reading it from disk if evicted."""
+        with self.load_lock:
+            a = self.attempts.get(identifier) or self.evicted.get(identifier)
+            if a is None:
+                # Only indexed IDs reach the filesystem, so a path can never escape the root.
+                if identifier in self.deleted_ids or not self.index.row(identifier): return None
+                path = self.root/identifier
+                if not (path/'private.json').exists(): return None
+                a = Attempt(path)
+            if a.deleted: return None
+            self.used[identifier] = time.monotonic()
+            if self.attempts.get(identifier) is not a:
+                self.attempts[identifier] = a
+                self.index_tokens(a)
+            return a
+
+    async def get(self, identifier):
+        a = self.attempts.get(identifier)
+        if a is not None:
+            self.used[identifier] = time.monotonic()
+            return a
+        return await asyncio.to_thread(self.load, identifier)
+
+    async def token_lookup(self, token):
+        """Resolve a bearer token to (attempt, role), including evicted finished attempts."""
+        digest = hashlib.sha256(token.encode()).hexdigest()
+        known = self.token_index.get(digest)
+        if known: return known
+        found = await asyncio.to_thread(self.index.token, digest)
+        if not found: return None
+        a = await self.get(found[0])
+        # The row may predate a credential rotation; trust only the live hash.
+        return (a, found[1]) if a is not None and a.info[found[1]+'_hash'] == digest else None
+
+    def summaries(self):
+        """Every attempt's public summary, newest activity first."""
+        live = {a.id: a.summary() for a in list(self.attempts.values()) if not a.deleted}
+        rows = [row for row in self.index.summaries() if row['id'] not in live]
+        return sorted([*rows, *live.values()], key=lambda row: row['last_activity'], reverse=True)
 
     async def enforce_limits(self):
         for a in list(self.attempts.values()):
@@ -116,6 +227,9 @@ class Server:
                 self.deleted_ids.add(attempt.id)
                 self.pending_deletions.add(attempt.id)
                 self.attempts.pop(attempt.id, None)
+                self.evicted.pop(attempt.id, None)
+                self.used.pop(attempt.id, None)
+                await asyncio.to_thread(self.index.remove, attempt.id)
                 self.index_tokens(attempt)
                 for ws in list(self.terminals[attempt.id]):
                     await ws.close(code=1008, message=b'Attempt deleted')
@@ -142,7 +256,7 @@ class Server:
     @web.middleware
     async def audit_requests(self, request, handler):
         token = request.headers.get('Authorization','').removeprefix('Bearer ')
-        known = self.token_index.get(hashlib.sha256(token.encode()).hexdigest()) if token else None
+        known = await self.token_lookup(token) if token else None
         status = 500
         try:
             if known and not (request.method in {'GET', 'HEAD'} and request.path in {'/player.md', '/guidebook.txt'}):
@@ -195,7 +309,9 @@ class Server:
             self.check_capacity(contributor)
             a, owner, player = await asyncio.to_thread(Attempt.create, self.root, metadata, self.instance, contributor, self.limits, owner_github_id)
             self.attempts[a.id] = a
+            self.used[a.id] = time.monotonic()
             self.index_tokens(a)
+            await asyncio.to_thread(self.index.put, a)
         if player_only:
             await asyncio.to_thread(a.audit, request.method, request.path, 'agent-start', 201)
             return web.json_response({'id':a.id, 'player_token':player,
@@ -219,7 +335,7 @@ class Server:
             await run_blocking(attempt.resume)
 
     async def route(self, request):
-        a = self.attempts.get(request.match_info['id'])
+        a = await self.get(request.match_info['id'])
         if a is None: raise web.HTTPNotFound()
         token = request.headers.get('Authorization','').removeprefix('Bearer ')
         role = a.role(token)

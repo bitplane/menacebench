@@ -128,8 +128,18 @@ def test_owner_replay_preparation_download_and_player_isolation(tmp_path, monkey
             response = await client.get(url)
             assert response.status == 200
             assert json.loads((await response.text()).splitlines()[0])['version'] == 3
+            assert response.headers['Content-Encoding'] == 'gzip'
+            assert response.headers['Content-Type'] == 'application/x-asciicast'
+            assert 'Accept-Encoding' in response.headers['Vary']
             download = await client.get(url+'?download=1')
             assert a.id+'.cast' in download.headers['Content-Disposition']
+            # Clients without gzip support get the same recording decompressed.
+            plain = await client.get(url+'?download=1', headers={'Accept-Encoding': 'identity'})
+            assert plain.status == 200 and 'Content-Encoding' not in plain.headers
+            assert plain.headers['Content-Type'] == 'application/x-asciicast'
+            assert a.id+'.cast' in plain.headers['Content-Disposition']
+            assert plain.headers['Content-Security-Policy'].startswith("default-src 'self'")
+            assert await plain.text() == await response.text()
             player = {'Authorization':'Bearer '+created['player_token']}
             assert (await client.get(url, headers=player)).status == 403
             assert not (a.path/'package').exists()
@@ -232,7 +242,8 @@ def test_any_github_user_can_view_but_only_owner_can_control(tmp_path, monkeypat
             assert not (a.path/'package').exists()
             assert (await client.post(base+'/replay')).status == 403  # CSRF still required
             assert (await client.post(base+'/replay', headers=headers)).status == 202
-            await server.browser.replays[a.id]
+            # A successful build removes its task, possibly before we look.
+            if task := server.browser.replays.get(a.id): await task
             assert (await client.post(base+'/replay', headers=headers)).status == 200
             assert (await client.get(base+'/replay')).status == 200
             assert (await client.get(base+'/replay?download=1')).status == 200

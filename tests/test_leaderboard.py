@@ -1,5 +1,4 @@
 import asyncio
-from types import SimpleNamespace
 
 from nethack_run.leaderboard import leaderboard
 from nethack_run.server import Server
@@ -8,9 +7,9 @@ from test_browser import CONFIG, login
 
 
 def run(model, effort, score, version='0.0.4', state='finished', kind='model', outcome='death'):
-    return SimpleNamespace(info={'harness_version': version,
-                                 'metadata': {'model': model, 'reasoning_effort': effort, 'player_type': kind}},
-                           state=state, result={'score': score} if score is not None else None, outcome=outcome)
+    # The same summary-row shape as Attempt.summary() and the SQLite index.
+    return {'harness_version': version, 'player': {'model': model, 'reasoning_effort': effort, 'player_type': kind},
+            'state': state, 'result': {'score': score} if score is not None else None, 'outcome': outcome}
 
 
 def test_averages_groups_versions_and_eligibility():
@@ -48,7 +47,8 @@ def test_leaderboard_requires_owner_and_filters_version(tmp_path, monkeypatch):
             assert (await client.get('/dashboard/leaderboard', headers=token)).status == 403
             await login(client, server, monkeypatch)
             # Fixture results are deliberately separate from any real game or journal.
-            server.attempts['fixture'] = run('<script>model</script>', 'xhigh', 25)
+            row = run('<script>model</script>', 'xhigh', 25) | {'id': 'fixture', 'last_activity': 0, 'owner_github_id': None}
+            server.index.write('fixture', '', 'owner', 'player', row)
             try:
                 response = await client.get('/dashboard/leaderboard?version=0.0.4')
                 body = await response.json()
@@ -56,7 +56,7 @@ def test_leaderboard_requires_owner_and_filters_version(tmp_path, monkeypatch):
                 assert 'seed' not in str(body) and 'token' not in str(body)
                 assert (await (await client.get('/dashboard/leaderboard?version=0.0.1')).json())['groups'] == []
             finally:
-                del server.attempts['fixture']
+                server.index.remove('fixture')
     asyncio.run(scenario())
 
 
@@ -65,22 +65,22 @@ def test_leaderboard_reconstructed_from_durable_attempt(tmp_path):
     a, _, _ = Attempt.create(tmp_path, {'player_type': 'model', 'model': 'Persisted', 'reasoning_effort': 'high'}, 'test')
     a.keys('Tester-Bar-Hum-Mal-Cha\ny#quit\ny'+' '*20, 1, 1)
     assert a.state == 'finished' and a.result is not None
-    expected = leaderboard([a])
+    expected = leaderboard([a.summary()])
     assert expected['scored_attempts'] == 1
-    assert leaderboard([Attempt(a.path)]) == expected
+    assert leaderboard([Attempt(a.path).summary()]) == expected
 
 
 def test_model_formatting_groups_with_stable_readable_display():
     variants = [run('GPT-6 Luna', 'high', 10), run('gpt 6 luna', 'high', 30),
                 run('GPT.6_LUNA', 'low', 60), run('GPT-6 Luna', 'high', 1000, version='0.0.1')]
     for index, a in enumerate(variants):
-        a.id = str(index)
-        a.last_activity = index
+        a['id'] = str(index)
+        a['last_activity'] = index
     result = leaderboard(reversed(variants), '0.0.4')
     assert len(result['groups']) == 2
     assert {r['model_key'] for r in result['groups']} == {'gpt6luna'}
     assert {r['model'] for r in result['groups']} == {'GPT-6 Luna'}
     high = next(r for r in result['groups'] if r['reasoning_effort'] == 'high')
     assert high['average_score'] == 20 and high['attempt_count'] == 2
-    assert variants[1].info['metadata']['model'] == 'gpt 6 luna'
+    assert variants[1]['player']['model'] == 'gpt 6 luna'
     assert leaderboard(variants, '0.0.4') == result

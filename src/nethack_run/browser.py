@@ -12,7 +12,7 @@ from urllib.parse import urlencode, urlsplit
 from aiohttp import ClientSession, ClientTimeout, ClientError, web
 from .attempt import Conflict
 from .access import github_id, run_blocking
-from .recording import recording
+from .recording import CAST, cached, recording, touch
 from .leaderboard import leaderboard
 
 ASSETS = Path(__file__).with_name('web')
@@ -68,7 +68,9 @@ class Browser:
         return 'admin' if self.config and session['id'] in self.config['owner_ids'] else 'viewer'
 
     def can_manage(self, session, attempt):
-        return self.role(session) == 'admin' or attempt.info.get('owner_github_id') == session['id']
+        # Accepts an Attempt or a summary row.
+        owner = attempt['owner_github_id'] if isinstance(attempt, dict) else attempt.info.get('owner_github_id')
+        return self.role(session) == 'admin' or owner == session['id']
 
     def require_owner(self, session, attempt):
         if not self.can_manage(session, attempt):
@@ -169,30 +171,28 @@ class Browser:
         return web.json_response({k: s[k] for k in ('login', 'id', 'csrf')} | {'role': self.role(s)})
 
     def summary(self, a, session):
-        return a.status() | {'harness_version': a.info.get('harness_version'), 'character': a.character, 'player': a.info['metadata'],
-                             'last_activity': a.last_activity, 'session_seconds': a.clock(),
-                             'owner_github_id': a.info.get('owner_github_id'),
-                             'is_mine': a.info.get('owner_github_id') == session['id'],
-                             'permissions': {'manage': self.can_manage(session, a),
-                                             'recover': self.can_manage(session, a) and a.state != 'finished',
+        """Add viewer permissions to an Attempt or an index summary row."""
+        row = a if isinstance(a, dict) else a.summary()
+        return row | {'is_mine': row['owner_github_id'] == session['id'],
+                             'permissions': {'manage': self.can_manage(session, row),
+                                             'recover': self.can_manage(session, row) and row['state'] != 'finished',
                                              'assign_owner': self.role(session) == 'admin',
                                              'delete': self.role(session) == 'admin'}}
 
     async def leaderboard(self, request):
         self.session(request)
-        return web.json_response(leaderboard(self.server.attempts.values(), request.query.get('version')))
+        return web.json_response(leaderboard(self.server.summaries(), request.query.get('version')))
 
     async def attempts(self, request):
         session = self.session(request)
         scope = request.query.get('scope', 'all')
         if scope not in {'all', 'mine'}: raise web.HTTPBadRequest(text='Invalid attempt scope')
-        attempts = sorted(self.server.attempts.values(), key=lambda a: a.last_activity, reverse=True)
-        return web.json_response([self.summary(a, session) for a in attempts
-                                  if scope == 'all' or a.info.get('owner_github_id') == session['id']])
+        return web.json_response([self.summary(row, session) for row in self.server.summaries()
+                                  if scope == 'all' or row['owner_github_id'] == session['id']])
 
     async def attempt(self, request):
         owner = self.session(request)
-        a = self.server.attempts.get(request.match_info['id'])
+        a = await self.server.get(request.match_info['id'])
         if a is None: raise web.HTTPNotFound()
         if request.method == 'GET':
             return web.json_response(self.summary(a, owner) | {'screen': a.frame.screen if a.frame else None})
@@ -202,7 +202,7 @@ class Browser:
             if action == 'replay':
                 if self.server.access[a.id].changing: raise Conflict('Run access is being changed')
                 if a.state != 'finished': raise Conflict('The attempt is still in progress')
-                if (a.path/'replay.cast').exists():
+                if await asyncio.to_thread(cached, a.path):
                     return web.json_response({'status':'ready', 'url':request.path})
                 task = self.replays.get(a.id)
                 if task is not None and task.done():
@@ -283,21 +283,47 @@ class Browser:
             except (OSError, ValueError, RuntimeError, TimeoutError):
                 # Do not publish a partial or divergent recording. The owner
                 # receives a retryable error without private verifier details.
+                # The finished task stays queued to report the failure once.
                 return
+            else:
+                # Success needs no marker (the cached file is the result), and a
+                # retained task would pin the attempt in memory.
+                if self.replays.get(attempt.id) is asyncio.current_task():
+                    del self.replays[attempt.id]
             finally:
                 self.replay_running.discard(attempt.id)
 
     async def replay_file(self, request):
         self.session(request)
-        a = self.server.attempts.get(request.match_info['id'])
+        a = await self.server.get(request.match_info['id'])
         if a is None: raise web.HTTPNotFound()
         if a.state != 'finished': raise web.HTTPConflict(text='The attempt is still in progress')
-        path = a.path/'replay.cast'
-        if not path.exists(): raise web.HTTPNotFound(text='Recording is not prepared yet')
-        response = web.FileResponse(path)
+        path = await asyncio.to_thread(cached, a.path)
+        if path is None: raise web.HTTPNotFound(text='Recording is not prepared yet')
+        await asyncio.to_thread(touch, path)
+        if 'gzip' in request.headers.get('Accept-Encoding', '').lower():
+            # FileResponse picks the .gz sibling and sets Content-Encoding and Vary.
+            response = web.FileResponse(a.path/CAST)
+        else:
+            # Headers must be final before a stream is prepared.
+            response = web.StreamResponse(headers=SECURITY_HEADERS | {'Vary': 'Accept-Encoding'})
         response.content_type = 'application/x-asciicast'
         if 'download' in request.query:
             response.headers['Content-Disposition'] = f'attachment; filename="{a.id}.cast"'
+        if isinstance(response, web.FileResponse): return response
+        return await self.inflate(request, response, path)
+
+    async def inflate(self, request, response, path):
+        """Stream a decompressed recording to a client that does not accept gzip."""
+        import gzip
+        await response.prepare(request)
+        file = await asyncio.to_thread(gzip.open, path, 'rb')
+        try:
+            while chunk := await asyncio.to_thread(file.read, 256*1024):
+                await response.write(chunk)
+        finally:
+            file.close()
+        await response.write_eof()
         return response
 
     async def cleanup(self, app):
@@ -322,14 +348,17 @@ class Browser:
         app.router.add_post('/dashboard/attempts/{id}/{action}', self.attempt)
 
 
+SECURITY_HEADERS = {'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer',
+                    'X-Content-Type-Options': 'nosniff',
+                    'Content-Security-Policy': "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"}
+
+
 @web.middleware
 async def browser_headers(request, handler):
     try: response = await handler(request)
     except web.HTTPException as response:
         response.headers['Cache-Control'] = 'no-store'
         raise
-    if request.path == '/' or request.path.startswith(('/auth/', '/dashboard/', '/assets/', '/agent/')):
-        response.headers.update({'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer',
-                                 'X-Content-Type-Options': 'nosniff',
-                                 'Content-Security-Policy': "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"})
+    if (request.path == '/' or request.path.startswith(('/auth/', '/dashboard/', '/assets/', '/agent/'))) and not response.prepared:
+        response.headers.update(SECURITY_HEADERS)
     return response
