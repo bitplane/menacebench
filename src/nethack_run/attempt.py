@@ -92,10 +92,11 @@ class Attempt:
     def clock(self):
         return self.elapsed + (time.monotonic()-self.started if self.started is not None else 0)
 
-    def checkpoint(self):
-        if self.frame:
-            self.character = self.frame.character or self.character
-            self.journal.append('checkpoint', session=self.session, boundary=self.frame.boundary, hash=self.frame.digest, character=self.frame.character)
+    def checkpoint(self, frame=None):
+        frame = frame or self.frame
+        if frame:
+            self.journal.append('checkpoint', session=self.session, boundary=frame.boundary, hash=frame.digest, character=frame.character)
+            self.character = frame.character or self.character
 
     def publish(self):
         if self.game:
@@ -115,8 +116,8 @@ class Attempt:
             self.session = index; self.elapsed = 0; self.started = time.monotonic()
             self.pause_requested.clear()
             self.game = Game(self.work, session_seed(self.info['seed'], index), on_consumed=self.record_key)
+            if self.game.frame: self.checkpoint(self.game.frame)
             self.frame = self.game.frame; self.state = 'running'; self.outcome = None
-            self.checkpoint()
             if self.game.exited: self.finish_session()
             self.publish()
             self.last_activity = time.time()
@@ -139,15 +140,12 @@ class Attempt:
                     self.pause('event_limit'); break
                 if self.clock() >= self.info['limits'].get('duration', 86400):
                     self.pause('duration_limit'); break
-                previous = self.frame
                 before = len(self.game.consumed)
                 self.advancing = True
                 try:
                     self.game.key(ord(char))
                 except (RuntimeError, BrokenPipeError):
                     if not self.pause_requested.is_set(): raise
-                finally:
-                    self.advancing = False
                 consumed += len(self.game.consumed)-before
                 if self.pause_requested.is_set():
                     # The kill may land after acknowledgment but before the next
@@ -156,16 +154,17 @@ class Attempt:
                     self.game.close(); self.game = None
                     self.elapsed = elapsed; self.started = None
                     self.rebuild()
+                    self.advancing = False
                     if self.state == 'running': self.pause(self.pause_reason)
                     break
-                self.frame = self.game.frame
-                if self.frame: self.checkpoint()
+                next_frame = self.game.frame
+                if next_frame: self.checkpoint(next_frame)
                 else:
-                    self.frame = previous
                     self.checkpoint()
-                    self.frame = None
+                self.frame = next_frame
                 self.terminal = bytes(self.game.output)
                 if self.game.exited: self.finish_session()
+                self.advancing = False
                 self.publish()
             self.last_activity = time.time()
             return consumed, len(keys)-consumed

@@ -28,6 +28,11 @@ async def main(args):
         # Ordinary creation inputs select a fixed role/race/gender/alignment.
         status=await send('Demo-Bar-Hum-Mal-Cha\ny')
         status=await send('..')
+        if args.save_resume:
+            status=await send('Sy ')
+            if status['state']!='saved':raise RuntimeError('Demo did not save')
+            async with client.post(base+'/resume',headers=player) as response:response.raise_for_status()
+            status=await send('a..')
         async with client.post(base+'/pause',headers=owner) as response:response.raise_for_status()
         async with client.post(base+'/resume',headers=player) as response:response.raise_for_status()
         status=await send('#quit\ny')
@@ -50,5 +55,6 @@ if __name__=='__main__':
     parser=argparse.ArgumentParser()
     parser.add_argument('--url',default='http://127.0.0.1:8000')
     parser.add_argument('--unix-socket')
+    parser.add_argument('--save-resume',action='store_true',help='Include a save and restore into a second session')
     parser.add_argument('--output',type=Path,default=ROOT/'build/demo')
     asyncio.run(main(parser.parse_args()))

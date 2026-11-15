@@ -60,6 +60,26 @@ def test_publication_follows_durable_key(tmp_path):
     a.pause()
 
 
+def test_screen_stays_at_published_boundary_during_checkpoint_sync(tmp_path, monkeypatch):
+    a = Attempt.create(tmp_path, {}, 'test')[0]
+    before = a.frame
+    append = a.journal.append
+    observed = []
+    def delayed_checkpoint(kind, **fields):
+        if kind == 'checkpoint':
+            observed.append(a.screen())
+            assert a.frame is before
+            assert a.status()['state'] == 'advancing'
+            assert not a.status()['accepting_input']
+        return append(kind, **fields)
+    monkeypatch.setattr(a.journal, 'append', delayed_checkpoint)
+    a.keys('T', 1, 1)
+    assert observed and a.frame.boundary == 2
+    assert a.status()['accepting_input']
+    monkeypatch.setattr(a.journal, 'append', append)
+    a.pause()
+
+
 @pytest.mark.parametrize('after',[False,True])
 def test_snapshot_publication_failure(tmp_path,monkeypatch,after):
     a=Attempt.create(tmp_path,{},'test')[0]
