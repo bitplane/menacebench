@@ -1,5 +1,6 @@
 """Serialized attempt lifecycle; the journal is authoritative."""
 from __future__ import annotations
+from .version import VERSION
 import gzip
 import hashlib
 import json
@@ -32,7 +33,8 @@ class Attempt:
         if not self.journal.events:
             self.journal.append('created', attempt_id=self.id, metadata=self.info['metadata'], instance=self.info['instance'],
                                 player_md_digest=self.info['player_digest'], build_identity=self.info['build_identity'],
-                                image_digest=self.info['image_digest'], fixed_game_date=FIXED_DATE)
+                                image_digest=self.info['image_digest'], fixed_game_date=FIXED_DATE,
+                                harness_version=self.info.get('harness_version'))
         self.game = None
         self.frame = None
         self.started = None
@@ -69,7 +71,7 @@ class Attempt:
         identifier = str(uuid.uuid4())
         path = root/identifier; path.mkdir(mode=0o700)
         owner, player = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
-        info = {'id': identifier, 'seed': secrets.token_hex(32), 'metadata': metadata,
+        info = {'harness_version': VERSION, 'id': identifier, 'seed': secrets.token_hex(32), 'metadata': metadata,
                 'instance': instance, 'contributor': contributor, 'limits': limits or {},
                 'owner_hash': hashlib.sha256(owner.encode()).hexdigest(),
                 'player_hash': hashlib.sha256(player.encode()).hexdigest(),
@@ -301,7 +303,7 @@ class Attempt:
             durations = [e['elapsed'] for e in ends]
             if self.outcome == 'abandoned' and self.state != 'saved' and len(ends)<self.session:
                 durations.append(self.elapsed)
-            manifest = {'schema_version': 1, 'attempt_id': self.id, 'server_instance': self.info['instance'],
+            manifest = {'harness_version': self.info.get('harness_version'), 'schema_version': 1, 'attempt_id': self.id, 'server_instance': self.info['instance'],
                         'player_metadata': self.info['metadata'], 'player_md_digest': self.info['player_digest'],
                         'image_digest': self.info['image_digest'], 'build_identity': self.info['build_identity'],
                         'seed': self.info['seed'], 'fixed_game_date': FIXED_DATE,

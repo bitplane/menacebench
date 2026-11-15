@@ -143,7 +143,7 @@ For Luna or another agent running on the machine with the SSH forward, use:
 
 The agent reads `/player.md` and calls `POST /agent/start` with its metadata.
 The response supplies a player token and relative attempt path, but no owner
-token or seed. It can then read screens, send keys, and resume. You can sign in
+token or seed. It can then read screens, send keys, pause, and resume. You can sign in
 and watch the same attempt on the dashboard. Use a base URL reachable from the
 agent's own machine; `localhost` always refers to the machine running that agent.
 Contributor authentication and concurrent-attempt limits apply to agent starts.
@@ -245,8 +245,12 @@ export reconstructs pacing from recorded key timestamps.
 Pass `--contributors contributors.json` to require contributor credentials for
 attempt creation. The file maps SHA-256 hashes of contributor bearer keys to
 contributor names. This is separate from per-attempt owner/player credentials.
-`--concurrency 2` limits unfinished attempts per contributor; without a
-contributor file it limits unfinished local attempts in total.
+`--concurrency 100` (the default) limits running games per contributor; without a
+contributor file it limits running local games in total. Paused and saved attempts
+free their slots. Creation and all resume paths return a capacity error when full;
+existing attempts and tokens remain valid. Use `make up CONCURRENCY=100` to set
+this limit for the container. Players can POST `/attempts/ID/pause` with their own
+token when blocked, then resume the same attempt later.
 
 Configure `--instance`, `--idle` (seconds without player input), `--duration`
 (active seconds per session), `--events` (event-count threshold that pauses play),
@@ -291,3 +295,17 @@ See [IMPLEMENTATION.md](IMPLEMENTATION.md) for the current acceptance status.
 NetHack and the upstream recorder patches retain their original notices and the
 [NetHack license](LICENSE-NetHack). Patch provenance is in
 [patches/ORIGIN.md](patches/ORIGIN.md).
+
+## Release metadata
+
+Attempts record `harness_version` separately from `schema_version` (the package
+format), the game build identity, and container image digest. The harness version
+is captured at creation and survives restarts and exports. Existing unversioned
+packages remain readable. Release `v0.0.1` identifies commit `69e794c`; new
+attempts use `0.0.2`.
+
+To backfill legacy data, stop the server and run
+`PYTHONPATH=src .venv/bin/python scripts/backfill_version.py STATE 0.0.1 BACKUP`.
+The tool locks the store, backs up every affected file, updates creation records
+and any existing package checksums, and preserves seeds, tokens, and game events.
+Keep the backup private: it contains the original private attempt data.

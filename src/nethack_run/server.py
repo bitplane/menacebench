@@ -14,7 +14,7 @@ from .engine import ROOT
 
 
 class Server:
-    def __init__(self, root, instance='local', contributors=None, concurrency=2, limits=None, github_auth=None):
+    def __init__(self, root, instance='local', contributors=None, concurrency=100, limits=None, github_auth=None):
         self.root = Path(root); self.root.mkdir(parents=True, exist_ok=True)
         self.instance = instance
         self.contributors = contributors
@@ -22,7 +22,7 @@ class Server:
         self.limits = limits or {'idle': 1800, 'duration': 86400, 'events': 1000000, 'expiry': 604800}
         self.attempts = {}
         self.token_index = {}
-        self.creation_lock = asyncio.Lock()
+        self.admission_lock = asyncio.Lock()
         self.monitor_task = None
         self.state_lock = None
         from .browser import Browser
@@ -79,7 +79,7 @@ class Server:
                 attempt, role = known
                 base = '/attempts/'+attempt.id
                 permissions = {
-                    'player': {('POST',base+'/keys'),('GET',base+'/screen'),('POST',base+'/resume')},
+                    'player': {('POST',base+'/keys'),('GET',base+'/screen'),('POST',base+'/resume'),('POST',base+'/pause')},
                     'owner': {('POST',base+'/pause'),('PUT',base+'/usage'),('GET',base),
                               ('GET',base+'/package'),('GET',base+'/tty')},
                 }
@@ -116,9 +116,8 @@ class Server:
             raise web.HTTPBadRequest(text='Invalid player_type')
         if any(value is not None and (not isinstance(value,str) or len(value)>4096) for value in metadata.values()):
             raise web.HTTPBadRequest(text='Metadata must contain strings or null')
-        async with self.creation_lock:
-            active = sum(a.info['contributor']==contributor and a.state!='finished' for a in self.attempts.values())
-            if active >= self.concurrency: raise web.HTTPTooManyRequests(text='Concurrent attempt limit reached')
+        async with self.admission_lock:
+            self.check_capacity(contributor)
             a, owner, player = await asyncio.to_thread(Attempt.create, self.root, metadata, self.instance, contributor, self.limits)
             self.attempts[a.id] = a
             self.index_tokens(a)
@@ -129,6 +128,21 @@ class Server:
                                       'instructions_path':'/player.md', 'status':a.status()}, status=201)
         return web.json_response({'id':a.id,'owner_token':owner,'player_token':player,'status':a.status()}, status=201)
 
+    def check_capacity(self, contributor):
+        active = sum(a.info['contributor'] == contributor and a.state == 'running'
+                     for a in self.attempts.values())
+        if active >= self.concurrency:
+            raise web.HTTPTooManyRequests(
+                text=f'Running game limit reached ({self.concurrency}). Pause a running game or retry when a slot is free. Existing attempts and tokens remain valid.')
+
+    async def resume_attempt(self, attempt):
+        # Creation and every resume entry point share admission serialization.
+        async with self.admission_lock:
+            if attempt.state not in {'paused', 'saved'}:
+                raise Conflict('Session is not resumable')
+            self.check_capacity(attempt.info['contributor'])
+            await asyncio.to_thread(attempt.resume)
+
     async def route(self, request):
         a = self.attempts.get(request.match_info['id'])
         if a is None: raise web.HTTPNotFound()
@@ -137,7 +151,7 @@ class Server:
         if role is None: raise web.HTTPUnauthorized()
         action = request.match_info.get('action','')
         allowed = {'owner': {('POST','pause'),('PUT','usage'),('GET',''),('GET','package'),('GET','tty')},
-                   'player': {('POST','keys'),('GET','screen'),('POST','resume')}}
+                   'player': {('POST','keys'),('GET','screen'),('POST','resume'),('POST','pause')}}
         disposition = 500
         try:
             if (request.method,action) not in allowed[role]:
@@ -153,9 +167,9 @@ class Server:
                 response = web.Response(text=a.screen(consumed,discarded))
             elif action == 'screen': response = web.Response(text=a.screen())
             elif action == 'resume':
-                await asyncio.to_thread(a.resume); response = web.Response(text=a.screen())
+                await self.resume_attempt(a); response = web.Response(text=a.screen())
             elif action == 'pause':
-                await asyncio.to_thread(a.pause); response = web.json_response(a.status())
+                await asyncio.to_thread(a.pause, role); response = web.json_response(a.status())
             elif action == 'usage':
                 await asyncio.to_thread(a.report_usage, await request.json()); response = web.json_response(a.status())
             elif action == 'package':
@@ -222,9 +236,13 @@ class Server:
                     continue
                 keys = message.data.decode('latin1') if isinstance(message.data,bytes) else message.data
                 try:
-                    if a.state in {'paused','saved'}: await asyncio.to_thread(a.resume)
+                    if a.state in {'paused','saved'}: await self.resume_attempt(a)
                     if a.frame: await asyncio.to_thread(a.keys,keys,a.session,a.frame.boundary)
                     await asyncio.to_thread(a.audit,'WS','tty',role,200)
+                except web.HTTPTooManyRequests as error:
+                    await asyncio.to_thread(a.audit,'WS','tty',role,429)
+                    await ws.send_json({'controlling':True,'status':a.status(),
+                                        'error':error.text,'code':429})
                 except (Conflict,ValueError):
                     await asyncio.to_thread(a.audit,'WS','tty',role,409)
                 if queue.full():

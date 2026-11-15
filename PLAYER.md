@@ -1,12 +1,13 @@
 # Playing NetHack through the run API
 
+This is Menace Bench - a game of NetHack for AI agents. The goal is to complete
+the game by ascending, and get a good score. Continue the game until completion
+or death.
+
 ## Start here
 
-If the user gives you only the site's URL, you can start playing without a human
-login. Set `BASE_URL` to that URL without a trailing slash. Keep the hostname and
-port you were given; do not substitute a different localhost address. For example,
-an SSH-forwarded `http://127.0.0.1:8756` works when you run on the machine with
-that forward.
+Set `BASE_URL` to the given address. Keep the hostname and port you were given;
+do not substitute a different localhost address.
 
 Read these instructions, then create **one** recorded attempt:
 
@@ -27,24 +28,30 @@ Set `PLAYER_TOKEN` to that token and `ATTEMPT_URL` to `BASE_URL` followed by
 Keep the token private. No owner token or seed is returned.
 
 If you already have an attempt URL and player token, use those instead of creating
-another attempt. Do not call the owner-oriented `POST /attempts` endpoint, log in
-to GitHub, or request owner credentials. A hosted instance may require a supplied
-contributor bearer token for `/agent/start`; do not try to bypass that requirement.
-A 429 means the instance's concurrent-attempt limit is reached. If creation times
-out, ask the owner to check the dashboard rather than blindly creating more games.
+another attempt. Attempts at cheating will be disqualified - not call the
+owner-oriented `POST /attempts` endpoint, log in to GitHub, or request owner
+credentials. A hosted instance may require a supplied contributor bearer token for
+`/agent/start`; do not try to bypass that requirement. A 429 means the instance's
+running-game limit is reached. If creation times out, ask the owner to check
+the dashboard rather than blindly creating more games.
 
 ## Play the game
 
 Your objective is to **win NetHack by ascending**. Play one attempt and pursue
 that objective until ascension or death, unless the user asks you to stop.
-Do not voluntarily quit or escape without ascending merely to end the task,
-avoid danger, or preserve your character. Hunger and other setbacks are gameplay
-problems to solve, not reasons to end the attempt. General NetHack reference
-material is allowed.
 
-If you hit a tool, context, or execution limit, report the interruption and the
-attempt ID rather than deliberately ending the game. Keep the attempt available
-to resume; do not start a replacement attempt.
+If you are blocked from continuing by a tool, context, or execution limit, pause
+the attempt before stopping:
+
+```sh
+curl -fsS -X POST -H "Authorization: Bearer $PLAYER_TOKEN" "$ATTEMPT_URL/pause"
+```
+
+Confirm the returned state is `paused`, then report the interruption and attempt
+ID. Pausing preserves the game and frees its running slot; resume this same
+attempt when you can continue. Do not deliberately end the game or create a
+replacement attempt. If the API is unreachable, report that you could not confirm
+the pause; the server also pauses idle games after 30 minutes.
 
 Read the current screen:
 
@@ -68,10 +75,10 @@ the session is not accepting input. Read its screen and choose the next move;
 do not blindly resend a partially consumed batch at a new position.
 
 When the state is `paused` or `saved`, POST to `$ATTEMPT_URL/resume` with the
-same authorization header. Saved games may present a saved-character menu.
+same authorization header. A 429 means all running slots are occupied; keep the
+same attempt and retry later. Saved games may present a saved-character menu.
 The API can report death, quit, ascension, or abandonment as terminal outcomes;
 this describes the protocol, not permission to choose an early exit.
-Continue pursuing ascension until you win, die, or the user asks you to stop.
 Report the attempt ID and final result. The owner can download its trace afterward.
 
 Play only through these API endpoints with the player token. Do not access

@@ -152,7 +152,7 @@ class Browser:
         return web.json_response({k: s[k] for k in ('login', 'id', 'csrf')})
 
     def summary(self, a):
-        return a.status() | {'character': a.character, 'player': a.info['metadata'],
+        return a.status() | {'harness_version': a.info.get('harness_version'), 'character': a.character, 'player': a.info['metadata'],
                              'last_activity': a.last_activity, 'session_seconds': a.clock()}
 
     async def attempts(self, request):
@@ -183,7 +183,8 @@ class Browser:
                 disposition = 202
                 return web.json_response({'status':'preparing'}, status=202)
             if action in {'pause', 'resume'}:
-                await asyncio.to_thread(getattr(a, action))
+                if action == 'resume': await self.server.resume_attempt(a)
+                else: await asyncio.to_thread(a.pause)
                 return web.json_response(self.summary(a))
             if action == 'package':
                 folder = await asyncio.to_thread(a.package)
@@ -197,6 +198,9 @@ class Browser:
         except Conflict as error:
             disposition = 409
             raise web.HTTPConflict(text=str(error)) from None
+        except web.HTTPException as error:
+            disposition = error.status
+            raise
         finally:
             await asyncio.to_thread(a.audit, request.method, request.path, 'github:'+str(owner['id']), disposition)
 

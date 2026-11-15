@@ -2,11 +2,12 @@ PYTHON ?= .venv/bin/python
 VENV_PYTHON ?= python3.12
 NETHACK_CONTAINER_ENGINE ?= podman
 PORT ?= 8756
+CONCURRENCY ?= 100
 GITHUB_AUTH_CONFIG ?= $(wildcard config/github-auth.local.json)
 comma := ,
 CONTAINER_NAME ?= nethack-run
 RUN_FLAGS = -p 127.0.0.1:$(PORT):8000 --mount type=volume,src=nethack-runs,dst=/runs $(if $(GITHUB_AUTH_CONFIG),--secret nethack-github-auth$(comma)target=/run/github-auth.json$(comma)uid=1000$(comma)gid=1000$(comma)mode=0400) -e NETHACK_IMAGE_DIGEST="$$(cat build/image-id)"
-SERVER_ARGS = $(if $(GITHUB_AUTH_CONFIG),serve --host 0.0.0.0 --port 8000 --state /runs --github-auth /run/github-auth.json)
+SERVER_ARGS = serve --host 0.0.0.0 --port 8000 --state /runs --concurrency $(CONCURRENCY) $(if $(GITHUB_AUTH_CONFIG),--github-auth /run/github-auth.json)
 export NETHACK_CONTAINER_ENGINE
 .PHONY: setup test verify-build
 setup:

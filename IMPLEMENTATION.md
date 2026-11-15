@@ -141,3 +141,17 @@ The normal `make cross-platform-test` remains available on ARM-capable runtimes.
 
 No official image has been registered, no remote repository/site has been
 created, and no result has been submitted. Phase 8 remains outside this goal.
+
+## Benchmark capacity and versioning follow-up
+
+The updated Podman image passes 121 tests, including player pause, concurrent
+creation/resume admission, saved-slot release, dashboard and terminal capacity
+checks, and backward-compatible release metadata migration. An isolated
+100-process load test (`PYTHONPATH=src .venv/bin/python scripts/load_test.py`)
+measured 615.7 MiB combined initial game RSS plus 39.8 MiB server RSS; ten games
+were paused and resumed without exceeding the cap. These are startup workloads,
+not a bound on memory retained by long event histories.
+
+Release tag `v0.0.1` points to `69e794c`. Current attempts record harness version
+`0.0.2` independently of package schema 1. The three existing benchmark traces
+were backed up under `/runs/version-backup-v0.0.1` and backfilled as `0.0.1`.

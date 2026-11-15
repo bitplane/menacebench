@@ -167,6 +167,8 @@ def verify(path, export=None, diagnostic_cross_build=False):
                 else:
                     raise ValueError(f'Unknown event type: {kind}')
             if created is None: raise ValueError('Missing creation record')
+            if manifest.get('harness_version') != created.get('harness_version'):
+                raise ValueError('Manifest harness_version mismatch')
             for field, event_field in [('attempt_id','attempt_id'),('player_metadata','metadata'),('server_instance','instance'),
                                        ('player_md_digest','player_md_digest'),('build_identity','build_identity'),
                                        ('image_digest','image_digest'),('fixed_game_date','fixed_game_date')]:

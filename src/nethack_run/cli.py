@@ -44,6 +44,7 @@ async def terminal(args):
                         sys.stdout.buffer.write(message.data);sys.stdout.buffer.flush()
                     elif message.type==WSMsgType.TEXT:
                         state=json.loads(message.data)
+                        if state.get('error'): print('\r\n'+state['error'],file=sys.stderr)
                         if args.command=='play' and not state.get('controlling',False):
                             print('\r\nAnother client controls this attempt; viewing only.',file=sys.stderr)
                         if state.get('status',{}).get('state')=='finished': break
@@ -65,7 +66,7 @@ def main(argv=None):
     serve.add_argument('--unix-socket');serve.add_argument('--instance',default='local')
     serve.add_argument('--contributors',type=Path,help='JSON mapping SHA-256 contributor-key hashes to contributor names')
     serve.add_argument('--github-auth',type=Path,help='Private GitHub OAuth configuration JSON for the owner dashboard')
-    serve.add_argument('--concurrency',type=int,default=2)
+    serve.add_argument('--concurrency',type=int,default=100)
     serve.add_argument('--idle',type=float,default=1800)
     serve.add_argument('--duration',type=float,default=86400)
     serve.add_argument('--events',type=int,default=1000000)

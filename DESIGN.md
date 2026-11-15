@@ -30,7 +30,7 @@ The server generates a random seed when an attempt is created; the API has no wa
 
 Each attempt has a state directory on the server, holding the seed, the event log, and a clean game directory with the save file between sessions. Scores, saves, and bones from other attempts are never visible to it. The seed and log are available only in the run package, after the attempt ends.
 
-A session can be paused by owner request, idle timeout, duration limit, server shutdown, or a server crash. Pausing kills the game process and discards any queued keys that the game has not consumed; nothing is sent to the game and no save is written.
+A session can be paused by player or owner request, idle timeout, duration limit, server shutdown, or a server crash. Pausing kills the game process and discards any queued keys that the game has not consumed; nothing is sent to the game and no save is written.
 
 The server snapshots the game directory at the start of every session and never modifies the snapshot. Resuming a paused session discards the working game directory, copies the snapshot into a fresh one, starts a new process with the same session seed, and replays the session's recorded keys to rebuild the state, then continues at the next boundary. The durable event log is authoritative: a key the game consumed before a crash but that never reached the durable log did not happen. Pauses therefore never affect game state, and replay verification ignores them.
 
@@ -46,11 +46,11 @@ Attempts left unresumed past an expiry period end with outcome `abandoned`.
 - **Remote**: the user runs the container on another machine and gives the agent its URL.
 - **Hosted**: the maintainer runs a public instance; contributors create attempts on it and run their own agents against it.
 
-The API is the only interface to the game in every case. The server names its instance in each run package. A hosted instance requires a contributor key to create attempts, limits concurrent attempts per key, and keeps every attempt created on it, including abandoned ones.
+The API is the only interface to the game in every case. The server names its instance in each run package. A hosted instance requires a contributor key to create attempts, limits running games per key (100 by default), and keeps every attempt created on it, including abandoned ones.
 
 ## API
 
-Creating an attempt returns its ID, a random UUID that stays fixed for the life of the attempt, and two bearer tokens. The **owner token** is for the user: pausing sessions, reporting usage, watching, and fetching the run package. The **player token** is what the user gives the agent: it can only send keys, read the screen, and resume.
+Creating an attempt returns its ID, a random UUID that stays fixed for the life of the attempt, and two bearer tokens. The **owner token** is for the user: pausing sessions, reporting usage, watching, and fetching the run package. The **player token** is what the user gives the agent: it can only send keys, read the screen, pause, and resume.
 
 ```text
 POST /attempts                    create an attempt and start its first session;
@@ -58,6 +58,7 @@ POST /attempts                    create an attempt and start its first session;
 GET  /player.md                   the instructions for model players
 
 player token:
+POST /attempts/{id}/pause         pause the current session and release its slot
 POST /attempts/{id}/keys          queue keys, wait for the next idle boundary,
                                   return the screen
 GET  /attempts/{id}/screen        return the current screen
@@ -77,7 +78,7 @@ WS   /attempts/{id}/tty           raw terminal stream; one controlling client,
 
 The response is plain text: the 24 screen lines followed by a status line with cursor position, session index, boundary number, session state, and the number of keys consumed and discarded. When the game has exited there is no further boundary and no screen; the response carries how the game exited and the result instead. Screens are text only, without colour or attributes.
 
-Model players use `keys`, `screen`, and `resume`. Human players use `nethack-run play`, which connects a local terminal to the `tty` WebSocket as the controlling client. `nethack-run watch` connects read-only.
+Model players use `keys`, `screen`, `pause`, and `resume`. Human players use `nethack-run play`, which connects a local terminal to the `tty` WebSocket as the controlling client. `nethack-run watch` connects read-only.
 
 The public main page also links agent instructions and offers GitHub sign-in for
 the human owner. An agent given only the base URL reads `/player.md`, then calls
