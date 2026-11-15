@@ -1,0 +1,2 @@
+OPTIONS=!tutorial,!bones,!news,!legacy,windowtype:tty,statuslines:2
+OPTIONS=menustyle:full,!autopickup

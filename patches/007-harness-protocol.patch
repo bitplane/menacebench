@@ -1,0 +1,81 @@
+diff --git a/include/wintty.h b/include/wintty.h
+--- a/include/wintty.h
++++ b/include/wintty.h
+@@ -17,6 +17,8 @@
+ extern void nomux_capture_write_screen(void);
+ extern void nomux_capture_write_input_boundary(void);
+ extern int nomux_anim_id;
++extern void harness_consumed(int);
++extern void harness_exit(void);
+ extern void nomux_putch(int ch);
+ extern void nomux_set_attr(int attr);
+ extern void nomux_end_attr(void);
+diff --git a/win/tty/termcap.c b/win/tty/termcap.c
+--- a/win/tty/termcap.c
++++ b/win/tty/termcap.c
+@@ -715,6 +715,14 @@
+     nomux_seq++;
+     nomux_emit_marker("input");
+ }
++
++void harness_consumed(int key) {
++    if (nomux_markers_enabled()) {
++        fprintf(stdout, "\033]7777;KIND=consumed;SEQ=%d;KEY=%d;LEN=0\007", nomux_seq, key);
++        fflush(stdout);
++    }
++}
++void harness_exit(void) { nomux_emit_marker("exit"); }
+ 
+ /* NOMUX shadow frame buffer implementation */
+ nomux_cell nomux_buf[24][80];
+diff --git a/src/end.c b/src/end.c
+--- a/src/end.c
++++ b/src/end.c
+@@ -1686,7 +1686,7 @@
+      * we get here. This single call ensures the harness sees the final
+      * state (with all topten lines painted) when waiting for SEQ to
+      * advance. See termcap.c nomux_raw_emit for the matching comment. */
+-    nomux_capture_write_input_boundary();
++    harness_exit();
+ #endif
+ 
+     l_nhcore_call(NHCORE_GAME_EXIT);
+diff --git a/win/tty/wintty.c b/win/tty/wintty.c
+--- a/win/tty/wintty.c
++++ b/win/tty/wintty.c
+@@ -4157,6 +4157,7 @@
+ #else
+         i = tgetch();
+ #endif
++        harness_consumed(i);
+         program_state.getting_char--;
+ #ifdef RESIZABLE
+         if (resize_mesg) {
+diff --git a/sys/unix/unixmain.c b/sys/unix/unixmain.c
+--- a/sys/unix/unixmain.c
++++ b/sys/unix/unixmain.c
+@@ -262,6 +262,8 @@
+             pline("Restoring save file...");
+         mark_synch(); /* flush output */
+         if (dorecover(nhfp)) {
++            init_random(rn2);
++            init_random(rn2_on_display_rng);
+             resuming = TRUE; /* not starting new game */
+             wd_message();
+             if (discover || wizard) {
+@@ -628,6 +630,7 @@
+ boolean
+ authorize_wizard_mode(void)
+ {
++    return FALSE; /* Harness: never authorize wizard mode. */
+     if (sysopt.wizards && sysopt.wizards[0]) {
+         if (check_user_string(sysopt.wizards))
+             return TRUE;
+@@ -640,6 +643,7 @@
+ boolean
+ authorize_explore_mode(void)
+ {
++    return FALSE; /* Harness: never authorize explore mode. */
+ #ifdef SYSCF
+     if (sysopt.explorers && sysopt.explorers[0]) {
+         if (check_user_string(sysopt.explorers))

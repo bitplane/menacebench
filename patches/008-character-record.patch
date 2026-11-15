@@ -1,0 +1,21 @@
+diff --git a/win/tty/termcap.c b/win/tty/termcap.c
+--- a/win/tty/termcap.c
++++ b/win/tty/termcap.c
+@@ -713,6 +713,17 @@
+ nomux_capture_write_input_boundary(void)
+ {
+     nomux_seq++;
++    if (nomux_markers_enabled() && u.uhpmax > 0
++        && flags.initrole >= 0 && flags.initrace >= 0
++        && flags.initgend >= 0 && flags.initalign >= 0) {
++        const unsigned char *name = (const unsigned char *) svp.plname;
++        fprintf(stdout, "\033]7777;KIND=character;NAME=");
++        while (*name) fprintf(stdout, "%02x", *name++);
++        fprintf(stdout, ";ROLE=%s;RACE=%s;GENDER=%s;ALIGN=%s;LEN=0\007",
++                roles[flags.initrole].filecode, races[flags.initrace].filecode,
++                genders[flags.initgend].filecode, aligns[flags.initalign].filecode);
++        fflush(stdout);
++    }
+     nomux_emit_marker("input");
+ }
+ 
