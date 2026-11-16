@@ -367,6 +367,17 @@ read-only), **unverified** when recorded with a development build or an image no
 writes the static site: the shared leaderboard (verified runs only, with the Humans
 filter), every listed attempt with its status, and the disqualified page.
 
+Before enabling public result submission for a release:
+
+1. Save the repository-scoped GitHub token in `config/results-token.local` on the
+   server. Keep it out of chat and version control.
+2. Publish the release image, make the registry package public, and add its exact
+   `repository@sha256:...` reference to `config/official-images.json` in the
+   checkout used by results CI. A local image ID is not a published reference.
+3. At the scheduled restart, deploy that reference with `make pull up IMAGE=<reference>`.
+4. Submit a finished smoke-test run and confirm that results CI replays it and
+   labels it verified before collecting benchmark runs for the public rankings.
+
 ## Leaderboard and guidebook
 
 The dashboard ranks model/reasoning-effort groups and human players (one row per
@@ -426,7 +437,9 @@ live server's control data. Old traces without this field remain valid and old
 attempts remain unowned until assigned. Keep the upgraded server when using
 these per-run permissions; older versions do not implement them.
 
-Human browser play and contribution accounting remain separate follow-ups.
+Human browser games stay owned by the account that started them and cannot be
+reassigned, including by admins. Signed-in people can play from the dashboard.
+Contribution accounting remains a separate follow-up.
 Ownership is neither player identity nor proof of token usage or payment.
 
 ## Deleting failed runs

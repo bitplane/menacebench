@@ -84,6 +84,33 @@ def test_play_starts_one_game_and_resumes_it(tmp_path, monkeypatch):
     run(scenario)
 
 
+def test_admin_cannot_reassign_human_game(tmp_path, monkeypatch):
+    async def scenario():
+        server = Server(tmp_path/'runs', github_auth=CONFIG)
+        async with wire_client(server, tmp_path) as client:
+            headers = await sign_in(client, server, monkeypatch, 5)
+            game = await (await client.post('/dashboard/play', headers=headers)).json()
+            url = '/dashboard/attempts/'+game['id']
+            a = server.attempts[game['id']]
+            admin = await sign_in(client, server, monkeypatch)
+            row = await (await client.get(url)).json()
+            assert not row['permissions']['assign_owner']
+            generation = a.info['player_token_generation']
+            for new_owner in (6, None):
+                response = await client.post(url+'/owner', headers=admin,
+                                            json={'owner_github_id': new_owner})
+                assert response.status == 409
+                assert 'cannot be reassigned' in await response.text()
+            assert a.info['owner_github_id'] == 5
+            assert a.info['player_token_generation'] == generation
+            headers = await sign_in(client, server, monkeypatch, 5)
+            await client.post(url+'/pause', headers=headers)
+            resumed = await (await client.post('/dashboard/play', headers=headers)).json()
+            assert resumed['id'] == a.id and resumed['permissions']['play']
+            assert a.state == 'running'
+    run(scenario)
+
+
 def test_browser_terminal_requires_same_origin_and_the_player(tmp_path, monkeypatch):
     async def scenario():
         server = Server(tmp_path/'runs', github_auth=CONFIG)

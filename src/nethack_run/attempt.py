@@ -128,6 +128,8 @@ class Attempt:
             github_id(owner_github_id)
             previous = self.info.get('owner_github_id')
             if previous == owner_github_id: return False
+            if self.info.get('human_github_id') is not None:
+                raise Conflict('Games played in the browser cannot be reassigned')
             generation = self.info.get('player_token_generation', 0) + 1
             # A previous owner must not retain delegated bearer-token access.
             self.update_access({'owner_github_id': owner_github_id,

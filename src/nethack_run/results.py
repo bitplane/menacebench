@@ -16,7 +16,7 @@ import uuid
 
 from .engine import ROOT
 from .leaderboard import leaderboard
-from .package import load_package
+from .package import load_package, verify
 
 PACKAGE_FILES = {'attempt.json', 'events.jsonl.gz'}
 ALLOWED = re.compile(r'attempts/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/'
@@ -45,8 +45,9 @@ def check(folder: Path):
         return record | {'status': 'unverified', 'reason': 'Recorded in an image that is not published'}
     from .images import dispatch
     try:
-        dispatch(folder)
-    except (OSError, ValueError, subprocess.SubprocessError) as error:
+        if not dispatch(folder):
+            verify(folder)
+    except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
         return record | {'reason': f'Replay failed in its recorded image: {error}'}
     return record | {'status': 'verified', 'reason': 'Replayed in its recorded official image'}
 

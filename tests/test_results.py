@@ -63,6 +63,21 @@ def test_check_classifies_packages(tmp_path, monkeypatch, official):
     assert check(pinned)['status'] == 'failed' and 'Replay failed' in check(pinned)['reason']
 
 
+def test_check_replays_natively_inside_recorded_image(tmp_path, monkeypatch):
+    folder = package(tmp_path/'runs', tmp_path/'results', {'model': 'Native'},
+                     image=IMAGE, monkeypatch=monkeypatch)
+    monkeypatch.setattr(results, 'official_images', lambda: [IMAGE])
+    monkeypatch.setenv('NETHACK_IMAGE_DIGEST', IMAGE)
+    # Real dispatch returns False inside the recorded image; check must replay locally.
+    assert check(folder)['status'] == 'verified'
+    manifest_path = folder/'attempt.json'
+    manifest = json.loads(manifest_path.read_bytes())
+    manifest['total_duration'] += 1
+    manifest_path.write_text(json.dumps(manifest))
+    outcome = check(folder)
+    assert outcome['status'] == 'failed' and 'duration mismatch' in outcome['reason']
+
+
 def test_pull_request_path_rules():
     ident = '6f1c0f7e-2b1d-4c55-9a0e-2a9f0d7e8b11'
     good = [f'A\tattempts/{ident}/attempt.json', f'A\tattempts/{ident}/events.jsonl.gz', f'M\tattempts/{ident}/disqualified.json']

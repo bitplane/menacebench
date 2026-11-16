@@ -193,7 +193,8 @@ class Browser:
                                              'play': self.can_play(session, row),
                                              'submit': (self.server.submitter is not None and row['state'] == 'finished'
                                                         and self.can_manage(session, row) and not row.get('submission')),
-                                             'assign_owner': self.role(session) == 'admin',
+                                             'assign_owner': (self.role(session) == 'admin'
+                                                              and row.get('human_github_id') is None),
                                              'delete': self.role(session) == 'admin'}}
 
     async def leaderboard(self, request):
