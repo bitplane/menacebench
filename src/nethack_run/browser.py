@@ -13,7 +13,7 @@ from aiohttp import ClientSession, ClientTimeout, ClientError, web
 from .attempt import Conflict
 from .access import github_id, run_blocking
 from .recording import CAST, cached, recording, touch
-from .submission import SubmissionError
+from .submission import Submitter, SubmissionError, AuthorizationError
 from .leaderboard import leaderboard
 
 ASSETS = Path(__file__).with_name('web')
@@ -123,7 +123,7 @@ class Browser:
         self.pending[state] = {'nonce': nonce, 'verifier': verifier, 'expires': time.time()+600}
         challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b'=').decode()
         response = web.HTTPFound('https://github.com/login/oauth/authorize?'+urlencode({
-            'client_id': self.config['client_id'], 'redirect_uri': self.callback, 'scope': '',
+            'client_id': self.config['client_id'], 'redirect_uri': self.callback, 'scope': 'public_repo',
             'state': state, 'code_challenge': challenge, 'code_challenge_method': 'S256',
             'allow_signup': 'false'}))
         self.cookie(response, NONCE, nonce, 600)
@@ -136,14 +136,20 @@ class Browser:
                         'client_id': self.config['client_id'], 'client_secret': self.config['client_secret'],
                         'code': code, 'redirect_uri': self.callback, 'code_verifier': verifier}) as response:
                 response.raise_for_status()
-                token = (await response.json()).get('access_token')
+                grant = await response.json()
+                token = grant.get('access_token')
                 if not token: raise ValueError('GitHub rejected authorization')
             async with client.get('https://api.github.com/user', headers={
                     'Authorization': 'Bearer '+token, 'Accept': 'application/vnd.github+json',
                     'User-Agent': 'nethack-run'}) as response:
                 response.raise_for_status()
-                return await response.json()
-        # Provider tokens are never stored in the run journal or browser session.
+                identity = await response.json()
+                scopes = set(grant.get('scope', '').replace(',', ' ').split())
+                credentials = {'token': token} if scopes & {'public_repo', 'repo'} else {}
+                if credentials and grant.get('expires_in') is not None:
+                    credentials['expires'] = time.time() + float(grant['expires_in'])
+                return identity, credentials
+        # Credentials stay only in the server-side session, never in run data or cookies.
 
     async def authorized(self, request):
         if self.config is None: raise web.HTTPServiceUnavailable()
@@ -155,7 +161,7 @@ class Browser:
         del self.pending[state]
         code = request.query.get('code')
         if not code or request.query.get('error'): raise web.HTTPBadRequest(text='GitHub login was cancelled')
-        try: identity = await self.identity(code, pending['verifier'])
+        try: identity, credentials = await self.identity(code, pending['verifier'])
         except (ClientError, asyncio.TimeoutError, ValueError, KeyError):
             raise web.HTTPBadGateway(text='GitHub login failed. Please try again.') from None
         if (type(identity.get('id')) is not int or identity['id'] <= 0
@@ -165,7 +171,7 @@ class Browser:
         if len(self.sessions) >= 128: raise web.HTTPTooManyRequests()
         key = secrets.token_urlsafe(32)
         self.sessions[key] = {'expires': time.time()+7*86400, 'csrf': secrets.token_urlsafe(32),
-                              'login': identity['login'], 'id': identity['id']}
+                              'login': identity['login'], 'id': identity['id'], 'github': credentials}
         response = web.HTTPFound('/')
         self.cookie(response, COOKIE, key, 7*86400)
         response.del_cookie(NONCE, path='/')
@@ -191,7 +197,7 @@ class Browser:
                                              'recover': (self.can_manage(session, row) and row['state'] != 'finished'
                                                          and row.get('human_github_id') is None),
                                              'play': self.can_play(session, row),
-                                             'submit': (self.server.submitter is not None and row['state'] == 'finished'
+                                             'submit': (row['state'] == 'finished'
                                                         and self.can_manage(session, row) and not row.get('submission')),
                                              'assign_owner': (self.role(session) == 'admin'
                                                               and row.get('human_github_id') is None),
@@ -328,18 +334,24 @@ class Browser:
                 await asyncio.to_thread(a.audit, request.method, request.path, 'github:'+str(owner['id']), disposition)
 
     async def submit(self, a, session):
-        """Finalize the package and open its results pull request with the admin token."""
-        if self.server.submitter is None:
-            raise web.HTTPServiceUnavailable(text='Results submission is not configured on this server')
+        """Submit as the signed-in person, using only their session credentials."""
         if a.state != 'finished': raise Conflict('Only finished attempts can be submitted')
         if a.submission: return web.json_response(self.summary(a, session))
+        credentials = session.get('github', {})
+        if not credentials.get('token') or credentials.get('expires', float('inf')) <= time.time():
+            session.pop('github', None)
+            raise web.HTTPUnauthorized(text='Sign in with GitHub again to authorize result submission')
+        submitter = Submitter(self.server.results_repo, credentials['token'])
         if a.id in self.server.submitting: raise Conflict('This attempt is already being submitted')
         self.server.submitting.add(a.id)
         try:
             # Submitting finalizes the package, freezing its usage report.
             folder = await run_blocking(a.package)
             try:
-                pull = await self.server.submitter.submit(folder, session['login'], session['id'])
+                pull = await submitter.submit(folder, session['login'], session['id'])
+            except AuthorizationError:
+                session.pop('github', None)
+                raise web.HTTPUnauthorized(text='GitHub authorization expired or was revoked. Sign in again.') from None
             except (SubmissionError, ClientError, OSError, asyncio.TimeoutError, KeyError, ValueError) as error:
                 raise web.HTTPBadGateway(text=f'Could not open the results pull request: {error}') from None
             await run_blocking(a.record_submission, pull, session['id'])

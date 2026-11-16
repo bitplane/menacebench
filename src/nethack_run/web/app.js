@@ -6,7 +6,7 @@ const scoreFormat = new Intl.NumberFormat(undefined, {maximumFractionDigits: 2})
 let replayId = null, replayPlayer = null, replayEpoch = 0;
 async function api(path, options = {}) {
   const response = await fetch(path, {cache: 'no-store', ...options, headers: {'X-CSRF-Token': csrf || '', ...options.headers}});
-  if (response.status === 401) { location.assign('/'); throw new Error('Please sign in again'); }
+  if (response.status === 401) { location.assign(path.endsWith('/submit') ? '/auth/github' : '/'); throw new Error('Please sign in again'); }
   if (!response.ok) throw new Error(await response.text());
   return response;
 }

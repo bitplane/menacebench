@@ -1,11 +1,5 @@
-"""Open results-repository pull requests with the server admin's GitHub token.
-
-Players never grant the server extra GitHub access. A fine-grained token scoped
-to the results repository (contents and pull requests: read and write) pushes a
-branch ``attempt/<id>`` adding ``attempts/<id>/attempt.json`` and
-``attempts/<id>/events.jsonl.gz``, then opens a pull request crediting the
-person who submitted it.
-"""
+"""Submit packages as the signed-in GitHub user, through a fork when needed."""
+import asyncio
 import base64
 import json
 from pathlib import Path
@@ -18,6 +12,10 @@ REPOSITORY = re.compile(r'[A-Za-z0-9-]+/[A-Za-z0-9._-]+')
 
 
 class SubmissionError(Exception):
+    pass
+
+
+class AuthorizationError(SubmissionError):
     pass
 
 
@@ -67,21 +65,23 @@ class Submitter:
         self.token = token.strip()
         self.api = api.rstrip('/')
 
-    async def call(self, method, path, body=None):
+    async def call(self, method, path, body=None, repository=None):
         """One GitHub REST call; tests replace this with an in-memory fake."""
         async with ClientSession(timeout=ClientTimeout(total=60)) as client:
-            async with client.request(method, f'{self.api}/repos/{self.repository}{path}', json=body, headers={
+            async with client.request(method, f'{self.api}/repos/{repository or self.repository}{path}', json=body, headers={
                     'Authorization': 'Bearer '+self.token, 'Accept': 'application/vnd.github+json',
                     'X-GitHub-Api-Version': '2022-11-28', 'User-Agent': 'menacebench'}) as response:
                 data = await response.json(content_type=None)
                 return response.status, data
 
-    async def checked(self, method, path, body=None, ok=(200, 201)):
-        status, data = await self.call(method, path, body)
+    async def checked(self, method, path, body=None, ok=(200, 201), repository=None):
+        status, data = await self.call(method, path, body, repository=repository)
+        if status == 401:
+            raise AuthorizationError('GitHub authorization is no longer valid')
         if status not in ok:
             # Never echo the token; GitHub's message is enough to diagnose.
             message = data.get('message') if isinstance(data, dict) else None
-            raise SubmissionError(f'GitHub {method} {path.split("?")[0]} failed ({status}): {message or "no message"}')
+            raise SubmissionError(f'GitHub {method} {path.split("?")[0]} failed ({status}): {(message or "no message").replace(self.token, "[redacted]")}')
         return data
 
     async def submit(self, folder: Path, login, github_id):
@@ -89,27 +89,65 @@ class Submitter:
         manifest = json.loads((Path(folder)/'attempt.json').read_bytes())
         identifier = manifest['attempt_id']
         branch = f'attempt/{identifier}'
-        existing = await self.checked('GET', f'/pulls?state=all&head={self.owner}:{branch}')
+        upstream = await self.checked('GET', '')
+        direct = upstream.get('permissions', {}).get('push', False)
+        destination = self.repository if direct else f'{login}/{self.repository.split("/")[1]}'
+        head_owner = self.owner if direct else login
+        existing = await self.checked('GET', f'/pulls?state=all&head={head_owner}:{branch}')
         if existing:
             return self.record(existing[0])
-        base = (await self.checked('GET', ''))['default_branch']
+        base = upstream['default_branch']
         head = (await self.checked('GET', f'/git/ref/heads/{base}'))['object']['sha']
-        tree = (await self.checked('GET', f'/git/commits/{head}'))['tree']['sha']
+        if not direct:
+            status, fork = await self.call('GET', '', repository=destination)
+            if status == 401: raise AuthorizationError('GitHub authorization is no longer valid')
+            if status == 404:
+                fork = await self.checked('POST', '/forks', {'default_branch_only': True}, ok=(202,))
+            elif status != 200:
+                raise SubmissionError(f'GitHub could not access your fork ({status})')
+            destination = fork.get('full_name', '')
+            if (not REPOSITORY.fullmatch(destination)
+                    or fork.get('owner', {}).get('id') != github_id
+                    or not fork.get('fork')):
+                raise SubmissionError('GitHub did not return a fork owned by your account')
+            # Fork metadata and Git objects can become available at different times.
+            for attempt in range(6):
+                status, fork = await self.call('GET', '', repository=destination)
+                if status == 200:
+                    parents = {fork.get(key, {}).get('full_name', '').lower() for key in ('parent', 'source')}
+                    if self.repository.lower() not in parents:
+                        raise SubmissionError('Your repository is not a fork of the results repository')
+                    status, _ = await self.call('GET', f'/git/commits/{head}', repository=destination)
+                    if status == 200: break
+                if status == 401: raise AuthorizationError('GitHub authorization is no longer valid')
+                if status not in (404, 409):
+                    raise SubmissionError(f'GitHub could not prepare your fork ({status})')
+                if attempt == 5:
+                    raise SubmissionError('GitHub is still preparing your fork. Try Submit again shortly.')
+                await asyncio.sleep(1)
+        async def write(method, path, body=None):
+            return await self.checked(method, path, body, repository=destination)
+        tree = (await write('GET', f'/git/commits/{head}'))['tree']['sha']
         entries = []
         for name in PACKAGE_FILES:
-            blob = await self.checked('POST', '/git/blobs', {
+            blob = await write('POST', '/git/blobs', {
                 'content': base64.b64encode((Path(folder)/name).read_bytes()).decode(), 'encoding': 'base64'})
             entries.append({'path': f'attempts/{identifier}/{name}', 'mode': '100644', 'type': 'blob', 'sha': blob['sha']})
         title, body, message = describe(manifest, login, github_id)
-        new_tree = (await self.checked('POST', '/git/trees', {'base_tree': tree, 'tree': entries}))['sha']
-        commit = (await self.checked('POST', '/git/commits', {'message': message, 'tree': new_tree, 'parents': [head]}))['sha']
-        status, _ = await self.call('POST', '/git/refs', {'ref': f'refs/heads/{branch}', 'sha': commit})
+        new_tree = (await write('POST', '/git/trees', {'base_tree': tree, 'tree': entries}))['sha']
+        commit = (await write('POST', '/git/commits', {'message': message, 'tree': new_tree, 'parents': [head]}))['sha']
+        status, _ = await self.call('POST', '/git/refs', {'ref': f'refs/heads/{branch}', 'sha': commit}, repository=destination)
         if status == 422:
             # A branch left by an earlier attempt that failed before opening its PR.
-            await self.checked('PATCH', f'/git/refs/heads/{branch}', {'sha': commit, 'force': True})
+            current = await write('GET', f'/git/ref/heads/{branch}')
+            previous = await write('GET', f"/git/commits/{current['object']['sha']}")
+            if previous['tree']['sha'] != new_tree:
+                raise SubmissionError('Submission branch already exists with different content; it was not overwritten')
+        elif status == 401:
+            raise AuthorizationError('GitHub authorization is no longer valid')
         elif status != 201:
             raise SubmissionError(f'GitHub could not create branch {branch} ({status})')
-        pull = await self.checked('POST', '/pulls', {'title': title, 'head': branch, 'base': base, 'body': body})
+        pull = await self.checked('POST', '/pulls', {'title': title, 'head': branch if direct else f'{login}:{branch}', 'base': base, 'body': body})
         return self.record(pull)
 
     def record(self, pull):

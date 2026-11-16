@@ -28,11 +28,13 @@ EVICT_AFTER = 300
 
 class Server:
     def __init__(self, root, instance='local', contributors=None, concurrency=100, limits=None, github_auth=None,
-                 cast_cache=None, submitter=None):
+                 cast_cache=None, results_repo='bitplane/menacebench-results'):
         self.root = Path(root); self.root.mkdir(parents=True, exist_ok=True)
         self.cast_cache = DEFAULT_CACHE | (cast_cache or {})
-        # Opens results pull requests with the admin's token; None disables submission.
-        self.submitter = submitter
+        from .submission import REPOSITORY
+        if not REPOSITORY.fullmatch(results_repo):
+            raise ValueError('results repository must look like owner/name')
+        self.results_repo = results_repo
         self.submitting = set()
         self.instance = instance
         self.contributors = contributors

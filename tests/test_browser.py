@@ -17,12 +17,12 @@ async def login(client, server, monkeypatch, user_id=273059):
     assert response.status == 302
     params = parse_qs(urlsplit(response.headers['Location']).query, keep_blank_values=True)
     assert params['redirect_uri'] == [CONFIG['public_url']+'/auth/github/callback']
-    assert params['scope'] == ['']
+    assert params['scope'] == ['public_repo']
     state = params['state'][0]
     async def identity(code, verifier):
         assert code == 'test-code'
         assert base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b'=').decode() == params['code_challenge'][0]
-        return {'id': user_id, 'login': 'bitplane'}
+        return {'id': user_id, 'login': 'bitplane'}, {'token': 'oauth-token-'+str(user_id)}
     monkeypatch.setattr(server.browser, 'identity', identity)
     response = await client.get('/auth/github/callback', params={'code': 'test-code', 'state': state}, allow_redirects=False)
     return response, state
@@ -256,3 +256,32 @@ def test_any_github_user_can_view_but_only_owner_can_control(tmp_path, monkeypat
             headers['X-CSRF-Token'] = me['csrf']
             assert (await client.post(base+'/package', headers=headers)).status == 200
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('scope,authorized', [('public_repo', True), ('repo', True), ('', False), ('read:user', False)])
+def test_oauth_exchange_retains_only_authorized_session_credentials(monkeypatch, scope, authorized):
+    from nethack_run.browser import Browser
+    calls = []
+    class Response:
+        def __init__(self, body): self.body = body
+        async def __aenter__(self): return self
+        async def __aexit__(self, *args): pass
+        def raise_for_status(self): pass
+        async def json(self): return self.body
+    class Client:
+        async def __aenter__(self): return self
+        async def __aexit__(self, *args): pass
+        def post(self, url, **kwargs):
+            calls.append(kwargs)
+            return Response({'access_token': 'private-token', 'scope': scope, 'expires_in': 3600})
+        def get(self, url, **kwargs):
+            assert kwargs['headers']['Authorization'] == 'Bearer private-token'
+            return Response({'id': 77, 'login': 'alice'})
+    monkeypatch.setattr('nethack_run.browser.ClientSession', lambda **kwargs: Client())
+    identity, credentials = asyncio.run(Browser(None, CONFIG).identity('code', 'verifier'))
+    assert identity == {'id': 77, 'login': 'alice'}
+    assert calls[0]['data']['code_verifier'] == 'verifier'
+    if authorized:
+        assert credentials['token'] == 'private-token' and credentials['expires'] > 0
+    else:
+        assert credentials == {}

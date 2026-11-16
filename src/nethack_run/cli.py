@@ -75,7 +75,6 @@ def main(argv=None):
     serve.add_argument('--cast-cache-bytes',type=int,default=2*1024**3,help='Total size budget for cached recordings')
     serve.add_argument('--min-free-bytes',type=int,default=2*1024**3,help='Evict cached recordings while free disk space is below this')
     serve.add_argument('--results-repo',default='bitplane/menacebench-results',help='GitHub repository that receives submitted runs')
-    serve.add_argument('--results-token',type=Path,help='File holding a fine-grained GitHub token for --results-repo; enables submission')
     for name in ('replay','export'):
         p=sub.add_parser(name);p.add_argument('package',type=Path)
         if name=='export':p.add_argument('--output',type=Path,required=True)
@@ -100,12 +99,7 @@ def main(argv=None):
         if args.cast_ttl<=0 or args.cast_cache_bytes<0 or args.min_free_bytes<0:parser.error('Cache limits must be positive')
         contributors=json.loads(args.contributors.read_text()) if args.contributors else None
         github_auth=json.loads(args.github_auth.read_text()) if args.github_auth else None
-        submitter=None
-        if args.results_token:
-            from .submission import Submitter
-            try:submitter=Submitter(args.results_repo,args.results_token.read_text())
-            except ValueError as error:parser.error(str(error))
-        server=Server(args.state,args.instance,contributors,args.concurrency,limits,github_auth,cast_cache,submitter)
+        server=Server(args.state,args.instance,contributors,args.concurrency,limits,github_auth,cast_cache,args.results_repo)
         web.run_app(server.app(),host=args.host if not args.unix_socket else None,
                     port=args.port if not args.unix_socket else None,path=args.unix_socket,access_log=None)
     elif args.command in ('replay','export'):

@@ -129,16 +129,21 @@ location with `GITHUB_AUTH_CONFIG=/absolute/path/to/private.json`. For native
 development, use `./nethack-run serve --github-auth config/github-auth.local.json`.
 Without configuration, the game API remains available but browser login is disabled.
 
-Login uses GitHub's authorization-code flow with state and PKCE, requesting no
-repository or email scopes. Any valid GitHub account receives viewer access;
+Login uses GitHub's authorization-code flow with state and PKCE, requesting
+`public_repo` so a signed-in person can submit results as themselves. GitHub asks
+for consent at first login, or at the next login when upgrading an existing grant.
+This permission covers public repositories the user can access, not only the
+results repository; no private-repository or email scope is requested. Any valid GitHub account receives viewer access;
 the configured numeric account IDs in `owner_ids` receive server admin access.
 `GET /dashboard/me` reports `role` as `viewer` or `admin`. Viewer replay preparation
 still requires CSRF protection. Login alone does not grant a player token or
-permission to control other people's games; browser-based human play is a future feature. Browser cookies are HttpOnly and SameSite=Lax (also Secure on
+permission to control other people's games. Signed-in people can start their own
+browser game. Browser cookies are HttpOnly and SameSite=Lax (also Secure on
 HTTPS); mutations require a same-origin CSRF token. Sessions expire after seven
 days and are cleared by server restart or sign-out. GitHub access tokens are
-used only to obtain identity and are not retained. OAuth codes and secrets are
-not included in run traces.
+kept only in the server-side session, never in cookies, browser responses, run
+traces, packages, or on disk. Expired or revoked credentials require signing in
+again. OAuth codes and secrets are not included in run traces.
 
 For access over SSH/Tailscale, forward the port (for example,
 `ssh -L 8756:127.0.0.1:8756 YOUR_SERVER`) and open `http://127.0.0.1:8756`
@@ -346,17 +351,26 @@ Keep the backup private: it contains the original private attempt data.
 Finished runs are published through pull requests to
 [`bitplane/menacebench-results`](https://github.com/bitplane/menacebench-results),
 whose CI checks each package and builds the public site at `menace.bitplane.net`.
-The server opens these pull requests with the admin's account, so players never
-grant it extra GitHub access. Create a fine-grained personal access token limited to
-that repository, with **Contents** and **Pull requests** set to read and write, save
-it as `config/results-token.local` (ignored by Git) and run `make up`; natively, pass
-`--results-token PATH` (and `--results-repo OWNER/NAME` for another repository).
+The server opens these pull requests as the signed-in person using the authorization
+already granted at GitHub login. There is no personal-token file or separate
+submission setup. Existing users sign in again to grant `public_repo`. For another
+results repository, pass `--results-repo OWNER/NAME` to the server.
 
-A run's owner, or an admin, then sees **Submit to results** on a finished run. It
-finalizes the package (freezing its usage report, like a download), pushes branch
-`attempt/<id>` adding `attempts/<id>/attempt.json` and `events.jsonl.gz`, and opens
-a pull request crediting the submitter with a `Co-authored-by` trailer. Submitting
-again shows the same pull request.
+A run's owner or an admin sees **Submit to results** on a finished run. Submission
+finalizes the package (freezing its usage report, like a download). If the person
+has write access, the server adds branch `attempt/<id>` to the results repository;
+otherwise it creates or reuses their fork. It adds only
+`attempts/<id>/attempt.json` and `events.jsonl.gz`, then opens a PR into the results
+repository. Fork preparation may require retrying shortly. Repeated submissions
+return the existing PR; conflicting branches are never overwritten.
+
+The PR is authored by the person who clicks Submit. An admin submitting another
+person's run acts as the admin; player identity and run ownership stay unchanged.
+Login itself does not create a fork or publish anything. Authorization lost through
+expiry or revocation sends the person back through GitHub login; they then click
+Submit again. Restarting or signing out clears the server's copy of the credentials.
+Old `RESULTS_TOKEN` configuration is no longer used and `--results-token` has been
+removed; remove any old local token file and revoke its token in GitHub.
 
 The results CI uses two commands from this repository. `nethack-run check` classifies
 packages: **verified** when replayed in their recorded official image (network off,
@@ -369,13 +383,11 @@ filter), every listed attempt with its status, and the disqualified page.
 
 Before enabling public result submission for a release:
 
-1. Save the repository-scoped GitHub token in `config/results-token.local` on the
-   server. Keep it out of chat and version control.
-2. Publish the release image, make the registry package public, and add its exact
+1. Publish the release image, make the registry package public, and add its exact
    `repository@sha256:...` reference to `config/official-images.json` in the
    checkout used by results CI. A local image ID is not a published reference.
-3. At the scheduled restart, deploy that reference with `make pull up IMAGE=<reference>`.
-4. Submit a finished smoke-test run and confirm that results CI replays it and
+2. At the scheduled restart, deploy that reference with `make pull up IMAGE=<reference>`.
+3. Sign in with GitHub and submit a finished smoke-test run and confirm that results CI replays it and
    labels it verified before collecting benchmark runs for the public rankings.
 
 ## Leaderboard and guidebook
