@@ -6,6 +6,7 @@ from collections import defaultdict
 import hashlib
 import io
 import json
+import logging
 from pathlib import Path
 import tarfile
 import threading
@@ -112,22 +113,29 @@ class Server:
     async def monitor(self):
         while True:
             await asyncio.sleep(1)
-            await self.enforce_limits()
-            if self.pending_deletions and time.monotonic() >= self.next_cleanup:
-                await self.cleanup_deleted()
-            if time.monotonic() >= self.next_eviction:
-                self.next_eviction = time.monotonic()+30
-                await self.evict_idle()
-            if time.monotonic() >= self.next_cast_prune:
-                self.next_cast_prune = time.monotonic()+600
-                await self.prune_casts()
+            await self.maintain()
+
+    async def maintain(self):
+        operations = [self.enforce_limits]
+        now = time.monotonic()
+        if self.pending_deletions and now >= self.next_cleanup:
+            operations.append(self.cleanup_deleted)
+        if now >= self.next_eviction:
+            self.next_eviction = now + 30
+            operations.append(self.evict_idle)
+        if now >= self.next_cast_prune:
+            self.next_cast_prune = now + 600
+            operations.append(self.prune_casts)
+
+        for operation in operations:
+            try:
+                await operation()
+            except Exception:
+                logging.getLogger(__name__).exception("Maintenance failed in %s", operation.__name__)
 
     async def prune_casts(self):
-        try:
-            await asyncio.to_thread(prune, self.root, self.cast_cache['ttl'], self.cast_cache['max_bytes'],
-                                    self.cast_cache['min_free_bytes'])
-        except OSError:
-            pass
+        await asyncio.to_thread(prune, self.root, self.cast_cache['ttl'], self.cast_cache['max_bytes'],
+                                self.cast_cache['min_free_bytes'])
 
     async def evict_idle(self, idle=EVICT_AFTER):
         """Write finished, unused attempts to the index and drop them from memory."""

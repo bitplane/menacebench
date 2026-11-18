@@ -148,3 +148,25 @@ def test_index_schema_mismatch_is_rebuilt(tmp_path):
     index.db.execute('PRAGMA user_version=999')
     index.close()
     assert Index(tmp_path/'index.sqlite').ids() == set()
+
+
+def test_maintenance_continues_after_eviction_failure(tmp_path, monkeypatch, caplog):
+    import asyncio
+    from unittest.mock import AsyncMock
+
+    async def scenario():
+        server = Server(tmp_path)
+        eviction = AsyncMock(side_effect=[OSError("index unavailable"), None])
+        eviction.__name__ = "evict_idle"
+        prune = AsyncMock()
+        monkeypatch.setattr(server, 'evict_idle', eviction)
+        monkeypatch.setattr(server, 'prune_casts', prune)
+        await server.maintain()
+        prune.assert_awaited_once()
+        assert 'index unavailable' in caplog.text
+        server.next_eviction = 0
+        await server.maintain()
+        assert eviction.await_count == 2
+        await server.stop(None)
+
+    asyncio.run(scenario())
