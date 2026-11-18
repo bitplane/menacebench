@@ -123,9 +123,9 @@ def board_table(board, ident):
         human = g['player_type'] == 'human'
         name = esc(g['player'] or ('Unknown person' if human else 'Unknown model')) + ('<span class="tag">human</span>' if human else '')
         rows.append(f"<tr><td>{g['rank']}</td><td>{name}</td><td>{'—' if human else esc(g['reasoning_effort'] or 'Unknown')}</td>"
-                    f"<td>{g['average_score']:.2f}</td><td>{g['attempt_count']}</td><td>{g['best_score']}</td><td>{g['ascensions']}</td></tr>")
+                    f"<td>{g['best_score']}</td><td>{esc(g['max_moves'])}</td><td>{g['attempt_count']}</td><td>{g['ascensions']}</td></tr>")
     return (f'<div class="scroll" id="{ident}"><table><thead><tr><th>Rank</th><th>Player</th><th>Reasoning effort</th>'
-            '<th>Average score</th><th>Attempts</th><th>Best score</th><th>Ascensions</th></tr></thead>'
+            '<th>Max score</th><th>Max moves</th><th>Scored games</th><th>Ascensions</th></tr></thead>'
             f'<tbody>{"".join(rows)}</tbody></table></div>')
 
 
@@ -157,7 +157,7 @@ def build_site(root: Path, output: Path, statuses, repo_url, cname=None):
 <p class="muted">People and models playing the same pinned NetHack build. Every package is a seed plus the keys the game consumed;
 CI replays each one in its recorded image before it is ranked. <a href="{esc(repo_url.rsplit('/tree/', 1)[0])}">Submissions repository</a></p>
 <section><div class="head"><h2>Leaderboard</h2><label><input id="humans" type="checkbox" checked> Humans</label></div>
-<p class="fine">Average score by model and reasoning effort, and by GitHub account for people. Only verified, completed attempts with a score count,
+<p class="fine">Highest score by model and reasoning effort, and by GitHub account for people. Only verified, completed attempts with a score count,
 including quits and zero scores. Untick Humans to compare models only.</p>
 {board_table(boards['with_humans'], 'with-humans')}{board_table(boards['models_only'], 'models-only')}</section>
 <section><h2>Attempts</h2><p class="fine">Unverified attempts were recorded with a development build or an unpublished image, so CI could not

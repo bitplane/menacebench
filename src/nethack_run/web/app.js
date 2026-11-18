@@ -1,12 +1,12 @@
 'use strict';
 const $ = id => document.getElementById(id);
-let csrf, isAdmin = false, permissions = {}, credentials = null, selected = null, busy = false, lastList = '';
-let refreshEpoch = 0, lastLeaderboard = '';
+let csrf, permissions = {}, credentials = null, selected = null, busy = false;
+let refreshEpoch = 0;
 const scoreFormat = new Intl.NumberFormat(undefined, {maximumFractionDigits: 2});
 let replayId = null, replayPlayer = null, replayEpoch = 0;
 async function api(path, options = {}) {
   const response = await fetch(path, {cache: 'no-store', ...options, headers: {'X-CSRF-Token': csrf || '', ...options.headers}});
-  if (response.status === 401) { location.assign(path.endsWith('/submit') ? '/auth/github' : '/'); throw new Error('Please sign in again'); }
+  if (response.status === 401) { location.assign(path.endsWith('/submit') ? '/auth/github' : location.href); throw new Error('Please sign in again'); }
   if (!response.ok) throw new Error(await response.text());
   return response;
 }
@@ -20,38 +20,118 @@ const playerLabel = a => {
 };
 const versionKey = a => a.harness_version || 'unknown';
 const versionLabel = a => a.harness_version ? `v${a.harness_version}` : 'Unknown version';
-function updateVersions(all) {
-  const select = $('version-filter'), previous = select.value;
-  const versions = [...new Set(all.map(versionKey))].sort((a, b) => a === 'unknown' ? 1 : b === 'unknown' ? -1 : b.localeCompare(a, undefined, {numeric: true}));
-  if (previous !== 'all' && !versions.includes(previous)) versions.push(previous);
-  const signature = JSON.stringify(versions);
-  if (select.dataset.versions === signature) return;
-  select.dataset.versions = signature;
-  select.replaceChildren(new Option('All versions', 'all'), ...versions.map(v => new Option(v === 'unknown' ? 'Unknown version' : `v${v}`, v)));
-  select.value = previous;
+const boardPage = location.pathname === '/leaderboard';
+const params = new URLSearchParams(location.search);
+selected = location.pathname.startsWith('/games/') ? location.pathname.slice(7) : null;
+let visibleIds, latestGames = [], tab = params.get('tab');
+const gameURL = id => '/games/' + encodeURIComponent(id);
+const tabNames = {playing: 'Playing', paused: 'Paused / saved', finished: 'Finished'};
+const groupOf = a => a.state === 'finished' ? 'finished' : ['paused', 'saved'].includes(a.state) ? 'paused' : 'playing';
+function pageURL(changes) {
+  const query = new URLSearchParams(params);
+  for (const [key, value] of Object.entries(changes)) {
+    if (value == null) query.delete(key); else query.set(key, value);
+  }
+  return location.pathname + (query.size ? '?' + query : '');
+}
+function updateVersions(versions) {
+  const select = $('version-filter');
+  const current = params.get('version') || 'all';
+  const values = new Set(versions);
+  if (current !== 'all') values.add(current);
+  const sorted = [...values].sort((a, b) => b.localeCompare(a, undefined, {numeric: true}));
+  if (select.dataset.versions === JSON.stringify(sorted)) return;
+  select.dataset.versions = JSON.stringify(sorted);
+  select.replaceChildren(new Option('All versions', 'all'), ...sorted.map(v => new Option(v, v)));
+  select.value = current;
+}
+function setText(node, value) {
+  const text = String(value ?? '—');
+  if (node.textContent !== text) node.textContent = text;
+}
+function linked(value, id) {
+  return id ? {text: value, href: gameURL(id)} : value;
+}
+function updateRows(body, records) {
+  const existing = new Map([...body.rows].map(row => [row.dataset.key, row]));
+  const wanted = new Set(records.map(record => record.key));
+  for (const [key, row] of existing) if (!wanted.has(key)) row.remove();
+  records.forEach(({key, cells}, index) => {
+    const row = existing.get(key) || document.createElement('tr');
+    row.dataset.key = key;
+    cells.forEach((value, i) => {
+      const cell = row.cells[i] || row.insertCell();
+      if (value?.href) {
+        let link = cell.firstElementChild;
+        if (!link) { link = document.createElement('a'); cell.replaceChildren(link); }
+        if (link.getAttribute('href') !== value.href) link.href = value.href;
+        setText(link, value.text);
+      } else setText(cell, value);
+    });
+    if (body.rows[index] !== row) body.insertBefore(row, body.rows[index] || null);
+  });
+}
+function lists(all) {
+  latestGames = all;
+  updateVersions(all.map(versionKey));
+  setText($('play'), all.some(a => a.permissions.play) ? 'Continue your game' : 'Play NetHack');
+  const filtered = all.filter(a => ($('owner-filter').value !== 'mine' || a.is_mine)
+    && ($('version-filter').value === 'all' || versionKey(a) === $('version-filter').value));
+  const groups = {playing: [], paused: [], finished: []};
+  for (const a of filtered) groups[groupOf(a)].push(a);
+  if (!Object.hasOwn(groups, tab)) tab = groups.playing.length ? 'playing' : 'finished';
+  for (const link of $('tabs').children) {
+    const key = link.dataset.tab;
+    setText(link, tabNames[key] + ' (' + groups[key].length + ')');
+    link.href = pageURL({tab:key, page:null});
+    if (key === tab) link.setAttribute('aria-current', 'page');
+  }
+  const finished = tab === 'finished';
+  const sorted = groups[tab].sort((a,b) => (finished
+    ? (b.result?.score ?? -Infinity) - (a.result?.score ?? -Infinity)
+    : (b.created_at || 0) - (a.created_at || 0)) || a.id.localeCompare(b.id));
+  if (!visibleIds) visibleIds = new Set(sorted.map(a => a.id));
+  const rows = tab === 'playing' ? sorted.filter(a => visibleIds.has(a.id)) : sorted;
+  const waiting = sorted.length - rows.length;
+  $('new-games').hidden = !waiting;
+  if (waiting) setText($('new-games'), 'Show ' + waiting + (waiting === 1 ? ' new game' : ' new games'));
+  const pages = Math.max(1, Math.ceil(rows.length / 25));
+  const page = Math.min(pages, Math.max(1, Number.parseInt(params.get('page'), 10) || 1));
+  params.set('tab', tab);
+  if (page > 1) params.set('page', page); else params.delete('page');
+  const url = pageURL({});
+  if (url !== location.pathname + location.search) history.replaceState(null, '', url);
+  for (const [id, number] of [['prev', page-1], ['next', page+1]]) {
+    $(id).hidden = number < 1 || number > pages;
+    $(id).href = pageURL({page:number});
+  }
+  setText($('count'), 'Page ' + page + ' of ' + pages);
+  $('empty').hidden = !!rows.length;
+  if (!$('columns').children.length) {
+    for (const title of finished ? ['Player','Character','Outcome','Score ↓','Moves',''] : ['Player','Character','State','Session','']) {
+      const th = document.createElement('th'); th.textContent = title; $('columns').append(th);
+    }
+  }
+  updateRows($('runs'), rows.slice((page-1)*25, page*25).map(a => ({
+    key:a.id, cells:[linked(playerLabel(a), a.id), a.character?.name || 'Choosing character', label(a),
+      ...(finished ? [a.result?.score?.toLocaleString(), a.result?.turns?.toLocaleString()] : [a.session]),
+      linked(finished ? 'Replay' : 'Watch', a.id)]
+  })));
 }
 function showLeaderboard(data) {
-  const signature = JSON.stringify(data);
-  if (signature === lastLeaderboard) return;
-  lastLeaderboard = signature;
-  $('leaderboard-rows').replaceChildren();
-  $('leaderboard-table').hidden = data.groups.length === 0;
-  $('leaderboard-summary').textContent = data.groups.length
-    ? `${data.scored_attempts} scored attempts · ${data.groups.length} groups · ${data.excluded_attempts} completed attempts without scores`
-    : `No scored attempts for this version. ${data.excluded_attempts} completed attempts have no recorded score.`;
-  for (const group of data.groups) {
-    const row = document.createElement('tr'), human = group.player_type === 'human';
-    for (const value of [group.rank, human ? group.player || 'Unknown person' : group.model || 'Unknown model',
-                         human ? '—' : group.reasoning_effort || 'Unknown',
-                         scoreFormat.format(group.average_score), group.attempt_count,
-                         scoreFormat.format(group.best_score), group.ascensions]) {
-      const cell = document.createElement('td'); cell.textContent = value; row.append(cell);
-    }
-    if (human) { const tag = document.createElement('span'); tag.className = 'tag'; tag.textContent = 'human'; row.children[1].append(tag); }
-    $('leaderboard-rows').append(row);
-  }
+  updateVersions(data.versions);
+  updateRows($('leaderboard-rows'), data.groups.map(g => ({
+    key: JSON.stringify([g.player_type,g.model_key,g.reasoning_effort,g.github_id]),
+    cells: [g.rank, g.player || 'Unknown', g.player_type === 'human' ? 'Human' : g.reasoning_effort || 'Unknown',
+      linked(scoreFormat.format(g.best_score),g.best_score_id),
+      linked(g.max_moves?.toLocaleString(),g.max_moves_id),g.attempt_count,g.ascensions]
+  })));
+  setText($('leaderboard-summary'), data.scored_attempts + ' scored games · ' + data.excluded_attempts + ' finished without a score');
 }
 function showDetails(a) {
+  const signature = JSON.stringify([a.player,a.human_github_id,a.harness_version,a.owner_github_id,a.id]);
+  if ($('attempt-details').dataset.signature === signature) return;
+  $('attempt-details').dataset.signature = signature;
   $('attempt-details').replaceChildren();
   const human = a.player.player_type === 'human' && a.human_github_id != null;
   for (const [label, value] of human ? [
@@ -106,48 +186,27 @@ async function refresh() {
   if (busy) return;
   const epoch = ++refreshEpoch;
   try {
-    const all = await (await api('/dashboard/attempts')).json();
-    if (epoch !== refreshEpoch) return;
-    updateVersions(all);
-    const filter = $('filter').value, version = $('version-filter').value;
-    const query = new URLSearchParams();
-    if (version !== 'all') query.set('version', version);
-    if (!$('humans-filter').checked) query.set('humans', '0');
-    const board = await (await api('/dashboard/leaderboard' + (query.toString() ? '?' + query : ''))).json();
-    if (epoch !== refreshEpoch) return;
-    showLeaderboard(board);
-    const runs = all.filter(a => ($('owner-filter').value !== 'mine' || a.is_mine) && (version === 'all' || versionKey(a) === version) &&
-      (filter === 'all' || (filter === 'active' ? a.state !== 'finished' : a.state === 'finished')));
-    $('count').textContent = `${runs.length} ${runs.length === 1 ? 'attempt' : 'attempts'}`;
-    $('play').textContent = all.some(a => a.permissions.play) ? 'Continue your game' : 'Play NetHack';
-    if (!runs.some(a => a.id === selected)) selected = runs[0]?.id || null;
-    if (credentials && credentials.id !== selected) clearCredentials();
-    const signature = JSON.stringify(runs.map(a => [a.id, name(a), label(a), a.session, a.key_count, a.player, a.harness_version, a.owner_github_id, a.permissions])) + selected;
-    if (signature !== lastList) {
-      lastList = signature;
-      $('runs').replaceChildren();
-      if (!runs.length) { const p = document.createElement('p'); p.className = 'empty'; p.textContent = all.length ? 'No attempts match these filters.' : 'No attempts here yet. Games created through the API will appear automatically.'; $('runs').append(p); }
-      for (const a of runs) {
-        const b = document.createElement('button'); b.className = 'run' + (a.id === selected ? ' selected' : ''); b.setAttribute('aria-pressed', String(a.id === selected));
-        const badge = document.createElement('span'); badge.className = 'badge'; badge.textContent = label(a);
-        const title = document.createElement('strong'); title.textContent = name(a);
-        const sub = document.createElement('small'); sub.textContent = `${versionLabel(a)} · ${playerLabel(a)} · Session ${a.session} · ${a.key_count} keys`;
-        b.append(badge, title, sub); b.onclick = () => { if (busy) return; clearCredentials(); selected = a.id; refresh(); }; $('runs').append(b);
-      }
-    }
-    $('detail').hidden = !selected;
-    if (!selected) { showReplay(null); showTerminal(null); }
-    if (selected) {
+    if (boardPage) {
+      const query = new URLSearchParams();
+      for (const key of ['version','humans']) if (params.has(key)) query.set(key,params.get(key));
+      showLeaderboard(await (await api('/dashboard/leaderboard?' + query)).json());
+    } else if (!selected) {
+      lists(await (await api('/dashboard/attempts')).json());
+    } else {
       const id = selected, a = await (await api('/dashboard/attempts/' + id)).json();
       if (epoch !== refreshEpoch || selected !== id) return;
-      $('title').textContent = name(a); $('state').textContent = label(a);
-      $('metadata').textContent = `${playerLabel(a)} · ${a.character ? [a.character.role, a.character.race, a.character.gender, a.character.align].join(' / ') : 'Choosing a character'} · Session ${a.session} · ${duration(a.session_seconds)} · Last activity ${new Date(a.last_activity * 1000).toLocaleString()}`;
-      $('screen').textContent = a.screen || 'This session has ended. Its consumed keys are preserved in the trace.';
+      $('detail').hidden = false;
+      setText($('title'), playerLabel(a) + ' · ' + name(a));
+      document.title = name(a) + ' | Menace Bench';
+      setText($('state'), label(a));
+      setText($('metadata'), `${a.character ? [a.character.role, a.character.race, a.character.gender, a.character.align].join(' / ') : 'Choosing a character'} · Session ${a.session} · ${duration(a.session_seconds)} · Last activity ${new Date(a.last_activity * 1000).toLocaleString()}`);
+      setText($('screen'), a.screen || 'Waiting for the game screen…');
       $('screen').hidden = a.state === 'finished' || a.permissions.play;
       showReplay(a);
       showTerminal(a);
       permissions = a.permissions;
-      if (!permissions.recover) clearCredentials();
+      $('manage').hidden = !(permissions.delete || permissions.assign_owner || permissions.recover);
+      if (!permissions.recover && credentials) clearCredentials();
       $('recover-player').hidden = !permissions.recover;
       $('delete-run').hidden = !permissions.delete;
       $('owner-assignment').hidden = !permissions.assign_owner;
@@ -157,7 +216,7 @@ async function refresh() {
       $('submit').hidden = !permissions.submit;
       $('submission').hidden = !a.submission;
       if (a.submission) $('submission').href = a.submission.url;
-      $('result').textContent = a.result ? `Score ${a.result.score} · ${a.result.turns} turns · Depth ${a.result.maximum_depth}\n${a.result.cause_of_death}` : '';
+      setText($('result'), a.result ? `Score ${a.result.score} · ${a.result.turns} turns · Depth ${a.result.maximum_depth}\n${a.result.cause_of_death}` : '');
       showDetails(a);
     }
     $('error').textContent = '';
@@ -220,8 +279,7 @@ $('play').onclick = async () => {
   busy = true;
   try {
     const game = await (await api('/dashboard/play', {method: 'POST'})).json();
-    $('filter').value = 'all'; $('owner-filter').value = 'all'; $('version-filter').value = 'all';
-    selected = game.id; lastList = ''; socketId = null; $('error').textContent = '';
+    location.assign(gameURL(game.id));
   } catch (e) { $('error').textContent = e.message; }
   finally { busy = false; }
   await refresh();
@@ -264,7 +322,7 @@ $('delete-run').onclick = async () => {
   busy = true; clearCredentials();
   try {
     await api(`/dashboard/attempts/${id}/delete`, {method:'POST'});
-    selected = null; lastList = ''; showReplay(null); $('detail').hidden = true;
+    location.assign('/');
     $('error').textContent = '';
   } catch (e) { $('error').textContent = e.message; }
   finally { busy = false; }
@@ -297,10 +355,35 @@ $('submit').onclick = () => {
   if (confirm('Open a pull request adding this run to the public results? This finalizes the package, including its usage report.')) action('submit');
 };
 $('pause').onclick = () => action('pause'); $('resume').onclick = () => action('resume'); $('download').onclick = () => action('package');
-$('filter').onchange = refresh;
-$('version-filter').onchange = refresh;
-$('owner-filter').onchange = refresh;
-$('humans-filter').onchange = refresh;
+$('version-filter').onchange = e => location.assign(pageURL({version:e.target.value === 'all' ? null : e.target.value, page:null}));
+$('owner-filter').value = params.get('scope') === 'mine' ? 'mine' : 'all';
+$('owner-filter').onchange = e => location.assign(pageURL({scope:e.target.value, page:null}));
+$('humans-filter').checked = params.get('humans') !== '0';
+$('humans-filter').onchange = e => location.assign(pageURL({humans:e.target.checked ? null : '0'}));
+$('new-games').onclick = () => { visibleIds = null; lists(latestGames); };
+$('runs').onclick = e => {
+  if (e.target.closest('a') || window.getSelection().toString()) return;
+  const row = e.target.closest('tr');
+  if (row) location.assign(gameURL(row.dataset.key));
+};
 $('replay-retry').onclick = () => { replayId = null; refresh(); };
 $('logout').onclick = async () => { try { await api('/auth/logout', {method: 'POST'}); location.assign('/'); } catch (e) { $('error').textContent = e.message; } };
-(async () => { try { const me = await (await api('/dashboard/me')).json(); csrf = me.csrf; isAdmin = me.role === 'admin'; $('account').textContent = `${me.login} · GitHub ID ${me.id}${isAdmin ? ' · Admin' : ''}`; $('viewer-note').hidden = isAdmin; await refresh(); setInterval(refresh, 1000); } catch (e) { $('error').textContent = e.message; } })();
+(async () => {
+  try {
+    const me = await (await api('/dashboard/me')).json();
+    csrf = me.csrf;
+    setText($('account'), me.login);
+    setText($('play'), me.has_game ? 'Continue your game' : 'Play NetHack');
+    $(boardPage ? 'board-nav' : 'games-nav').setAttribute('aria-current','page');
+    $('listing').hidden = !!selected;
+    $('board').hidden = $('people').hidden = !boardPage;
+    $('games').hidden = $('scope').hidden = $('tabs').hidden = boardPage;
+    setText($('heading'), boardPage ? 'Leaderboard' : 'Games');
+    document.title = $('heading').textContent + ' | Menace Bench';
+    async function poll() {
+      if (!document.hidden) await refresh();
+      setTimeout(poll, selected ? 1000 : 5000);
+    }
+    await poll();
+  } catch (e) { setText($('error'), e.message); }
+})();

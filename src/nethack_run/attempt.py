@@ -48,6 +48,7 @@ class Attempt:
         self.result = None
         self.usage = None
         self.character = None
+        self.created_at = self.info.get('created_at') or (path/'private.json').stat().st_mtime
         self.last_activity = time.time()
         self.terminal = b''
         self.listeners = set()
@@ -79,7 +80,7 @@ class Attempt:
         identifier = str(uuid.uuid4())
         path = root/identifier; path.mkdir(mode=0o700)
         owner, player = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
-        info = {'harness_version': VERSION, 'id': identifier, 'seed': secrets.token_hex(32), 'metadata': metadata,
+        info = {'harness_version': VERSION, 'id': identifier, 'created_at': time.time(), 'seed': secrets.token_hex(32), 'metadata': metadata,
                 'instance': instance, 'contributor': contributor, 'limits': limits or {},
                 'owner_github_id': owner_github_id, 'initial_owner_github_id': owner_github_id,
                 # Set only for games a signed-in person plays from the dashboard.
@@ -346,7 +347,7 @@ class Attempt:
 
     def summary(self):
         """Public, session-independent row shared by the dashboard, index and leaderboard."""
-        return self.status() | {'harness_version': self.info.get('harness_version'), 'character': self.character,
+        return self.status() | {'created_at': self.created_at, 'harness_version': self.info.get('harness_version'), 'character': self.character,
                                 'player': self.info['metadata'], 'last_activity': self.last_activity,
                                 'session_seconds': self.clock(), 'owner_github_id': self.info.get('owner_github_id'),
                                 'human_github_id': self.info.get('human_github_id'),

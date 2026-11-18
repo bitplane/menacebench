@@ -21,10 +21,10 @@ def test_averages_groups_versions_and_eligibility():
     result = leaderboard(runs, '0.0.4', humans=False)
     assert result['scored_attempts'] == 4 and result['excluded_attempts'] == 1
     assert [(r['model'], r['reasoning_effort'], r['average_score']) for r in result['groups']] == [
-        ('A', 'low', 80), ('B', 'high', 60), ('A', 'high', 50)]
-    assert result['groups'][2]['attempt_count'] == 2
-    assert result['groups'][2]['best_score'] == 100
-    assert result['groups'][1]['ascensions'] == 1
+        ('A', 'high', 50), ('A', 'low', 80), ('B', 'high', 60)]
+    assert result['groups'][0]['attempt_count'] == 2
+    assert result['groups'][0]['best_score'] == 100
+    assert result['groups'][2]['ascensions'] == 1
     assert leaderboard(runs, humans=False)['groups'][0]['average_score'] == 1100/3
     # Humans share the table by default.
     assert leaderboard(runs, '0.0.4')['groups'][0]['player_type'] == 'human'
@@ -109,3 +109,13 @@ def test_humans_share_the_leaderboard_grouped_by_github_account():
     assert result['scored_attempts'] == 5 and result['excluded_attempts'] == 1
     without = leaderboard(runs, humans=False)
     assert [r['player'] for r in without['groups']] == ['A'] and without['excluded_attempts'] == 0
+
+
+def test_score_and_move_records_link_to_their_own_games():
+    first = run('A', 'high', 99) | {'id': 'first'}
+    other = run('A', 'high', 5) | {'id': 'other'}
+    first['result']['turns'] = 2
+    other['result']['turns'] = 500
+    row, = leaderboard([first, other])['groups']
+    assert (row['best_score'], row['best_score_id']) == (99, 'first')
+    assert (row['max_moves'], row['max_moves_id']) == (500, 'other')

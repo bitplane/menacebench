@@ -45,6 +45,10 @@ def test_owner_login_browse_controls_and_logout(tmp_path, monkeypatch):
             rows = await (await client.get('/dashboard/attempts')).json()
             assert len(rows) == 1 and rows[0]['id'] == created['id']
             assert 'seed' not in json.dumps(rows) and 'token' not in json.dumps(rows)
+            for path in ['/leaderboard', '/games/'+created['id']]:
+                page = await client.get(path)
+                assert page.status == 200 and 'id="games-nav"' in await page.text()
+                assert page.headers['Cache-Control'] == 'no-store'
             base = '/dashboard/attempts/'+created['id']
             assert (await client.get(base)).status == 200
             assert (await client.get('/attempts/'+created['id'])).status == 401

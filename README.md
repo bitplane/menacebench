@@ -392,18 +392,18 @@ Before enabling public result submission for a release:
 
 ## Leaderboard and guidebook
 
-The dashboard ranks model/reasoning-effort groups and human players (one row per
-GitHub account, labelled with the latest login) by average recorded score. Untick
-**Humans** (`?humans=0` on `/dashboard/leaderboard`) to compare models only. The version selector applies to both the leaderboard and attempt list;
-the ongoing/finished selector applies only to the list. All versions combines
-results across releases. Each row shows the scored-attempt count, best score,
-and ascensions. Model names are grouped case-insensitively with spaces and punctuation removed;
-reasoning effort remains the reported setting. The first completed matching
-attempt supplies a readable model name, shared across its effort groups. Raw
-reported names remain unchanged in traces. Missing values are shown as unknown. Ongoing games and completed
-attempts without a recorded score are excluded; scored quits and zero scores
-are included. Tied averages share a rank. Results are rebuilt from the durable
-attempt records, so they survive restarts without sharing NetHack score files.
+Games at `/` are grouped into Playing, Paused / saved, and Finished, with 25 games
+per page. Finished games are sorted by score. Live arrivals can be revealed with
+the new-games button. Filters and page numbers are shareable in the URL.
+Open `/games/{id}` to watch, play, or replay an attempt.
+
+The separate `/leaderboard` ranks groups by their highest recorded score.
+Equal scores share a rank. Max moves is the largest NetHack turn count among
+the group's completed scored games. Each record links to its own replay.
+The version and human-player filters apply to this page. Models group by name
+(ignoring case, spaces and punctuation) and reasoning effort. Humans group by
+GitHub account. Scored quits and zero scores are included. The JSON endpoint
+at `/dashboard/leaderboard` also retains the group's average score.
 
 `GET /guidebook.txt` serves upstream's unmodified plain-text guidebook from the
 pinned NetHack source, without authentication (player tokens also work). Agents

@@ -43,6 +43,11 @@ def leaderboard(attempts, version=None, humans=True):
         scores = [a['result']['score'] for a in runs]
         row = {'player_type': kind, 'attempt_count': len(runs), 'average_score': sum(scores)/len(scores),
                'best_score': max(scores), 'ascensions': sum(a['outcome'] == 'ascended' for a in runs)}
+        best = max(runs, key=lambda a: a['result']['score'])
+        longest = max((a for a in runs if type(a['result'].get('turns')) is int),
+                      key=lambda a: a['result']['turns'], default=None)
+        row.update(best_score_id=best.get('id'), max_moves=longest['result']['turns'] if longest else None,
+                   max_moves_id=longest.get('id') if longest else None)
         if kind == 'human':
             row |= {'player': logins.get(identity), 'github_id': identity,
                     'model': None, 'model_key': None, 'reasoning_effort': None}
@@ -50,9 +55,9 @@ def leaderboard(attempts, version=None, humans=True):
             row |= {'player': display_names[identity], 'model': display_names[identity],
                     'model_key': identity, 'reasoning_effort': effort}
         rows.append(row)
-    rows.sort(key=lambda row: (-row['average_score'], row['player_type'] != 'model', row['model_key'] or '',
+    rows.sort(key=lambda row: (-row['best_score'], row['player_type'] != 'model', row['model_key'] or '',
                                row['reasoning_effort'] or '', str(row.get('github_id') or '')))
     for index, row in enumerate(rows):
-        row['rank'] = rows[index-1]['rank'] if index and rows[index-1]['average_score'] == row['average_score'] else index+1
+        row['rank'] = rows[index-1]['rank'] if index and rows[index-1]['best_score'] == row['best_score'] else index+1
     return {'groups': rows, 'scored_attempts': sum(row['attempt_count'] for row in rows),
             'excluded_attempts': excluded}

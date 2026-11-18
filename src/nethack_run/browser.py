@@ -3,6 +3,7 @@ import asyncio
 import base64
 import hashlib
 import io
+import re
 import secrets
 import tarfile
 import time
@@ -102,6 +103,9 @@ class Browser:
             if self.config is None:
                 html = html.replace('<a class="button" href="/auth/github">Sign in with GitHub →</a>',
                                     '<p>GitHub login is not configured. See README.md: Browser login.</p>')
+            elif request.path != '/' or request.query_string:
+                query = urlencode({'next': str(request.rel_url)})
+                html = html.replace('href="/auth/github"', f'href="/auth/github?{query}"')
             return web.Response(text=html, content_type='text/html')
         return web.FileResponse(ASSETS/'index.html')
 
@@ -116,11 +120,14 @@ class Browser:
         # Cookies are host-scoped. In particular localhost and 127.0.0.1
         # cannot share the nonce used by GitHub's registered callback.
         if request.host != urlsplit(self.origin).netloc:
-            raise web.HTTPFound(self.origin+'/auth/github')
+            raise web.HTTPFound(self.origin+str(request.rel_url))
         self.prune()
         if len(self.pending) >= 256: raise web.HTTPTooManyRequests()
         state, nonce, verifier = (secrets.token_urlsafe(32) for _ in range(3))
         self.pending[state] = {'nonce': nonce, 'verifier': verifier, 'expires': time.time()+600}
+        destination = request.query.get('next', '/')
+        if re.fullmatch(r'/(?:leaderboard|games/[0-9a-f-]{36})?(?:\?[^#\\\s]*)?', destination):
+            self.pending[state]['next'] = destination
         challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b'=').decode()
         response = web.HTTPFound('https://github.com/login/oauth/authorize?'+urlencode({
             'client_id': self.config['client_id'], 'redirect_uri': self.callback, 'scope': 'public_repo',
@@ -172,7 +179,7 @@ class Browser:
         key = secrets.token_urlsafe(32)
         self.sessions[key] = {'expires': time.time()+7*86400, 'csrf': secrets.token_urlsafe(32),
                               'login': identity['login'], 'id': identity['id'], 'github': credentials}
-        response = web.HTTPFound('/')
+        response = web.HTTPFound(pending.get('next', '/'))
         self.cookie(response, COOKIE, key, 7*86400)
         response.del_cookie(NONCE, path='/')
         raise response
@@ -186,7 +193,9 @@ class Browser:
 
     async def me(self, request):
         s = self.session(request)
-        return web.json_response({k: s[k] for k in ('login', 'id', 'csrf')} | {'role': self.role(s)})
+        return web.json_response({k: s[k] for k in ('login', 'id', 'csrf')} | {'role': self.role(s),
+                                 'has_game': any(a.state != 'finished' and a.info.get('human_github_id') == s['id']
+                                                 for a in list(self.server.attempts.values()))})
 
     def summary(self, a, session):
         """Add viewer permissions to an Attempt or an index summary row."""
@@ -207,7 +216,10 @@ class Browser:
         self.session(request)
         humans = request.query.get('humans', '1')
         if humans not in {'0', '1'}: raise web.HTTPBadRequest(text='humans must be 0 or 1')
-        return web.json_response(leaderboard(self.server.summaries(), request.query.get('version'), humans == '1'))
+        rows = self.server.summaries()
+        board = leaderboard(rows, request.query.get('version'), humans == '1')
+        board['versions'] = sorted({row.get('harness_version') or 'unknown' for row in rows})
+        return web.json_response(board)
 
     async def play(self, request):
         """Start the signed-in person's only unfinished game, or resume it."""
@@ -420,6 +432,8 @@ class Browser:
     def routes(self, app):
         app.on_cleanup.append(self.cleanup)
         app.router.add_get('/', self.home)
+        app.router.add_get('/leaderboard', self.home)
+        app.router.add_get('/games/{id}', self.home)
         app.router.add_get('/assets/{name}', self.asset)
         app.router.add_get('/auth/github', self.login)
         app.router.add_get('/auth/github/callback', self.authorized)
@@ -445,6 +459,6 @@ async def browser_headers(request, handler):
     except web.HTTPException as response:
         response.headers['Cache-Control'] = 'no-store'
         raise
-    if (request.path == '/' or request.path.startswith(('/auth/', '/dashboard/', '/assets/', '/agent/'))) and not response.prepared:
+    if (request.path in {'/', '/leaderboard'} or request.path.startswith(('/games/', '/auth/', '/dashboard/', '/assets/', '/agent/'))) and not response.prepared:
         response.headers.update(SECURITY_HEADERS)
     return response
