@@ -72,8 +72,7 @@ local content-addressed image ID in `build/image-id`. `make up` passes that ID
 to the server and stores attempts in the `nethack-runs` Podman volume. An image
 intended for distribution should use its registry `repository@sha256:...`
 reference as `NETHACK_IMAGE_DIGEST`, and that exact reference must be added to
-`config/official-images.json` after its checks pass. That allowlist is currently
-empty; this checkout does not claim an official published image exists.
+`config/official-images.json` after its checks pass.
 
 Pushing a `v*` tag runs `.github/workflows/image.yml`, which builds the image and
 publishes it to `ghcr.io/bitplane/menacebench` (the package must be public so
