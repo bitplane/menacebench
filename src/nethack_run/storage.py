@@ -34,8 +34,8 @@ def atomic_json(path: Path, value):
 
 def snapshot(source: Path, destination: Path):
     temporary = destination.with_name(destination.name + '.' + uuid.uuid4().hex + '.tmp')
-    shutil.copytree(source, temporary)
     try:
+        shutil.copytree(source, temporary)
         for path in temporary.rglob('*'):
             if path.is_file():
                 with path.open('rb') as file:

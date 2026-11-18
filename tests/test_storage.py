@@ -137,3 +137,26 @@ def test_recover_creation_before_first_log_event(tmp_path):
     assert recovered.state=='paused'
     recovered.expire()
     assert verify(recovered.package())['verified']
+
+
+def test_partial_snapshot_copy_is_removed_and_can_be_retried(tmp_path, monkeypatch):
+    import shutil
+
+    source = tmp_path/'source'
+    source.mkdir()
+    (source/'save').write_bytes(b'saved game')
+    destination = tmp_path/'snapshot'
+
+    def partial_copy(source, temporary):
+        temporary.mkdir()
+        shutil.copyfile(source/'save', temporary/'save')
+        raise OSError('disk full')
+
+    with monkeypatch.context() as patch:
+        patch.setattr(shutil, 'copytree', partial_copy)
+        with pytest.raises(OSError, match='disk full'):
+            snapshot(source, destination)
+
+    assert list(tmp_path.iterdir()) == [source]
+    snapshot(source, destination)
+    assert (destination/'save').read_bytes() == b'saved game'
