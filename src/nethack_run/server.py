@@ -137,20 +137,26 @@ class Server:
         await asyncio.to_thread(prune, self.root, self.cast_cache['ttl'], self.cast_cache['max_bytes'],
                                 self.cast_cache['min_free_bytes'])
 
+    def can_evict(self, attempt, cutoff):
+        identifier = attempt.id
+        replay = self.browser.replays.get(identifier)
+        gate = self.access.get(identifier)
+        return (self.attempts.get(identifier) is attempt and attempt.state == 'finished'
+                and self.used.get(identifier, 0) <= cutoff and not self.terminals.get(identifier)
+                and (replay is None or replay.done())
+                and (gate is None or not (gate.active or gate.changing)))
+
     async def evict_idle(self, idle=EVICT_AFTER):
         """Write finished, unused attempts to the index and drop them from memory."""
-        now = time.monotonic()
+        cutoff = time.monotonic() - idle
         for a in list(self.attempts.values()):
-            replay = self.browser.replays.get(a.id)
-            if (a.state != 'finished' or now-self.used.get(a.id, 0) < idle or self.terminals.get(a.id)
-                    or (replay is not None and not replay.done())
-                    or self.access[a.id].active or self.access[a.id].changing):
+            if not self.can_evict(a, cutoff):
                 continue
             await asyncio.to_thread(self.index.put, a)
             # Never block the event loop on a disk load in progress; retry later.
             if not self.load_lock.acquire(blocking=False): return
             try:
-                if self.attempts.get(a.id) is not a: continue
+                if not self.can_evict(a, cutoff): continue
                 del self.attempts[a.id]
                 self.evicted[a.id] = a
                 self.used.pop(a.id, None)

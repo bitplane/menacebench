@@ -170,3 +170,40 @@ def test_maintenance_continues_after_eviction_failure(tmp_path, monkeypatch, cap
         await server.stop(None)
 
     asyncio.run(scenario())
+
+
+def test_request_during_index_write_prevents_eviction(tmp_path, monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+
+    async def scenario():
+        server = Server(tmp_path)
+        attempt = SimpleNamespace(id='finished', state='finished')
+        server.attempts[attempt.id] = attempt
+        gate = server.access[attempt.id]
+
+        for activity in ('access', 'lookup'):
+            writing = asyncio.Event()
+            release = asyncio.Event()
+
+            async def delayed_write(function, attempt):
+                assert function == server.index.put
+                writing.set()
+                await asyncio.wait_for(release.wait(), 5)
+
+            monkeypatch.setattr(asyncio, 'to_thread', delayed_write)
+            eviction = asyncio.create_task(server.evict_idle(idle=0))
+            await asyncio.wait_for(writing.wait(), 5)
+            if activity == 'access':
+                async with gate.operation():
+                    release.set()
+                    await eviction
+            else:
+                await server.get(attempt.id)
+                release.set()
+                await eviction
+            assert server.attempts[attempt.id] is attempt
+            assert server.access[attempt.id] is gate
+        server.index.close()
+
+    asyncio.run(scenario())
